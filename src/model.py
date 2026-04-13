@@ -43,7 +43,7 @@ DEFAULTS = {
     "utility_threshold": -0.2,
     "seed": None,
     # heatmap export params
-    "export_every": 10,
+    "export_every": 3,
     "out_dir": "../output/heatmaps",
     # MCDA weights for UGS attributes (from literature)
     "w_proximity": 0.40,
@@ -282,9 +282,8 @@ class GreenGentModel(Model):
     def build_rent_grid(self):
         grid = np.zeros((self.width, self.height))
         for (x, y), cell in self.cell_map.items():
-            #demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
-            #grid[x, y] = cell.current_rent(demand_factor, self.demand_price_elasticity, self.beta_ugs)
-            grid[x, y] = cell.base_rent
+            demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
+            grid[x, y] = cell.current_rent(demand_factor, self.demand_price_elasticity, self.beta_ugs)
         return grid
 
     def build_green_grid(self):
