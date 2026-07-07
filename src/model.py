@@ -33,14 +33,14 @@ DEFAULTS = {
     "park_size_small": 1000,
     "park_size_medium": 10000,
     "park_size_large": 100000,
-    # parameters for rent calculation (need to be confirmed) aus https://data.census.gov/table/ACSDT1Y2022.B25064?q=median+gross+rent&y=2022
+    # parameters for rent calculation from https://data.census.gov/table/ACSDT1Y2022.B25064?q=median+gross+rent&y=2022
     "base_rent_mean": 7.2, # Median income of 1300$
     "base_rent_sigma": 0.5,
     "demand_price_elasticity": 0.08,
     # agents preferences
-    "green_attraction": 40.0,
+    "green_attraction": 50.0,
     "move_search_radius": 4,
-    "utility_threshold": -0.2,
+    "utility_threshold": 20,
     "seed": None,
     # heatmap export params
     "export_every": 3,
@@ -51,7 +51,7 @@ DEFAULTS = {
     "w_quality": 0.25,
     "w_function": 0.25,
     # Hedonic capitalization parameter (beta_ugs)
-    "beta_ugs": 0.12,
+    "beta_ugs": 0.2,
 }
 
 # -------------------------
@@ -194,7 +194,8 @@ class GreenGentModel(Model):
                 "middle_count": lambda m: m.count_group("middle"),
                 "high_count": lambda m: m.count_group("high"),
                 "avg_rent": lambda m: m.average_rent(),
-                "avg_green": lambda m: m.average_green()
+                "avg_green": lambda m: m.average_green(),
+                "high_local": lambda m: m.local_high_income_share(),
             }
         )
 
@@ -253,6 +254,44 @@ class GreenGentModel(Model):
     def average_green(self):
         return float(np.mean([c.green_score for c in self.cell_map.values()]))
 
+    def local_high_income_share(self, radius=3):
+        """
+        Durchschnittlicher High-Income-Anteil um alle Parks.
+        """
+        if len(self.parks) == 0:
+            return 0.0
+
+        shares = []
+
+        for park in self.parks:
+            px, py = park.pos
+
+            high = 0
+            total = 0
+
+            for dx in range(-radius, radius + 1):
+                for dy in range(-radius, radius + 1):
+
+                    x = px + dx
+                    y = py + dy
+
+                    if 0 <= x < self.width and 0 <= y < self.height:
+
+                        cell = self.cell_map[(x, y)]
+
+                        for a in cell.occupants:
+                            total += 1
+                            if a.income_group == "high":
+                                high += 1
+
+            if total > 0:
+                shares.append(high / total)
+
+        if len(shares) == 0:
+            return 0.0
+
+        return np.mean(shares)
+
     def sample_cells_around(self, pos, radius=5, k=30):
         x0, y0 = pos
         candidates = []
@@ -277,6 +316,25 @@ class GreenGentModel(Model):
                 grid[x, y] = np.mean(incomes)
             else:
                 grid[x, y] = np.nan
+        return grid
+
+    def build_high_income_share_grid(self):
+        """
+        Gibt ein 2D-Array zurück, das pro Zelle den Anteil der High-Income-Haushalte enthält.
+        Wertebereich: 0.0 bis 1.0
+        """
+        grid = np.zeros((self.width, self.height))
+
+        for (x, y), cell in self.cell_map.items():
+            if cell.occupancy == 0:
+                grid[x, y] = np.nan  # leere Zellen als NaN anzeigen
+                continue
+
+            high = sum(1 for a in cell.occupants if a.income_group == "high")
+            total = cell.occupancy
+
+            grid[x, y] = high / total
+
         return grid
 
     def build_rent_grid(self):
@@ -343,6 +401,7 @@ class GreenGentModel(Model):
     def export_heatmaps(self, step):
         income_grid = self.build_income_grid()
         rent_grid = self.build_rent_grid()
+        high_share_grid = self.build_high_income_share_grid()
 
         if np.isnan(income_grid).all():
             income_vmin, income_vmax = 0, 1
@@ -354,10 +413,22 @@ class GreenGentModel(Model):
         fname_income = os.path.join(self.out_dir, f"income_year_{step:02d}.png")
         fname_rent_parks = os.path.join(self.out_dir, f"rent_year_{step:02d}.png")
 
+        fname_high_share = os.path.join(self.out_dir, f"high_income_share_year_{step:02d}.png")
+
         self.save_heatmap(income_grid, f"Average Income (Year {step})", f"Income per month in $", fname_income,
                           cmap="cividis", vmin=income_vmin, vmax=income_vmax, overlay_parks=True)
         self.save_heatmap(rent_grid, f"Rent with Parks (Year {step})", f"Rent per month in $", fname_rent_parks,
                           cmap="inferno", vmin=rent_vmin, vmax=rent_vmax, overlay_parks=True)
+        self.save_heatmap(
+            high_share_grid,
+            f"High-Income Share (Year {step})",
+            "Share of high-income households",
+            fname_high_share,
+            cmap="Reds",
+            vmin=0.0,
+            vmax=1.0,
+            overlay_parks=True
+        )
 
     # -------------------------
     # Step: agents act, then rents update via demand feedback
@@ -368,7 +439,7 @@ class GreenGentModel(Model):
         for cell in self.cell_map.values():
             demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
             # base rent drift influenced by occupancy and green_score
-            drift = 1.0 + 0.001 * demand_factor + 0.0005 * cell.green_score
+            drift = 1.0 + 0.003 * math.log1p(demand_factor) + 0.002 * cell.green_score
             cell.base_rent *= drift
 
             #print(f"Cell {cell.pos}-> base_rent:{round(cell.base_rent, 1)}, Green-Score:{round(cell.green_score, 2)}")
@@ -396,13 +467,14 @@ class GreenGentModel(Model):
                 inc_min = float(np.min(vals))
                 inc_max = float(np.max(vals))
                 inc_median = float(np.median(vals))
-                print(
-                    f"[CELL INCOME] Step {self._step_count}: min={inc_min:.2f}  median={inc_median:.2f}  max={inc_max:.2f}")
-            else:
-                print(f"[CELL INCOME] Step {self._step_count}: no occupied cells")
+                #print(
+                    #f"[CELL INCOME] Step {self._step_count}: min={inc_min:.2f}  median={inc_median:.2f}  max={inc_max:.2f}")
+            #else:
+                #print(f"[CELL INCOME] Step {self._step_count}: no occupied cells")
 
-            print(f"[CELL RENT] Step {self._step_count}: base_rent min={min(base_rents):.2f} max={max(base_rents):.2f} "
-                  f"current_rent min={min(demand_rents):.2f} max={max(demand_rents):.2f}")
+            #print(f"[CELL RENT] Step {self._step_count}: base_rent min={min(base_rents):.2f} max={max(base_rents):.2f} "
+                  #f"current_rent min={min(demand_rents):.2f} max={max(demand_rents):.2f}")
+
     # -------------------------
     # Run with heatmap export
     # -------------------------

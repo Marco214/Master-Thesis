@@ -33,7 +33,7 @@ def run_example(steps, seed):
     clear_out_dir(out_dir, pattern="*.png")  # clear previous PNGs
 
     model = GreenGentModel(width=7, height=7, n_agents=1000,
-                          seed=seed, export_every=3, out_dir=out_dir,
+                          seed=seed, export_every=5, out_dir=out_dir,
                           w_proximity=0.40, w_size=0.25, w_quality=0.25, w_function=0.10,
                           beta_ugs=0.12, park_coverage=0.12)
 
@@ -53,6 +53,7 @@ def run_example(steps, seed):
 
         # Data from DataCollector (avg_rent, avg_green) if available
         df = model.datacollector.get_model_vars_dataframe()
+
         if not df.empty:
             rec = df.iloc[-1]
             avg_rents.append(rec["avg_rent"])
@@ -89,4 +90,4 @@ def run_example(steps, seed):
     #plt.show()
 
 if __name__ == "__main__":
-    run_example(steps=15, seed=123)
+    run_example(steps=50, seed=123)

@@ -9,28 +9,27 @@ class Household(Agent):
         #print("Agent", self.unique_id, self.income_group, self.income_value)
 
     def utility(self, cell):
-        """
-        Utility function combining:
-        - disposable income after rent (income_value - rent)
-        - attractiveness from green_score (MCDA aggregated)
-        - social preference: prefer neighbors of similar income
-        """
+        # --- 1. Rent burden (einkommensabhängig) ---
         demand_factor = cell.occupancy / max(1, (self.model.width * self.model.height) / 100.0)
         rent = cell.current_rent(demand_factor, self.model.demand_price_elasticity, self.model.beta_ugs)
-        rent_burden = rent / (self.income_value + 1e-6)
-        income_utility = (self.income_value - rent) / 100.0
-        green_pref = self.model.green_attraction * cell.green_score
-        # social component: fraction of neighbors of same group within Moore neighborhood (agents)
-        same_count = 0
-        neigh_count = 0
+
+        rent_burden = rent / (self.income_value *
+                              {"low": 0.8, "middle": 1.2, "high": 2.5}[self.income_group])
+
+        # --- 2. Disposable income utility ---
+        income_utility = (self.income_value - rent) / 200.0
+
+        # --- 3. Green preference (einkommensabhängig) ---
+        green_weight = {"low": 0.3, "middle": 1.0, "high": 2.5}[self.income_group]
+        green_pref = green_weight * self.model.green_attraction * cell.green_score
+
+        # --- 4. Social homophily ---
         neighbors = self.model.grid.get_neighbors(cell.pos, moore=True, include_center=False, radius=1)
-        for other in neighbors:
-            neigh_count += 1
-            if getattr(other, "income_group", None) == self.income_group:
-                same_count += 1
-        social_component = (same_count / neigh_count) if neigh_count > 0 else 0.0
-        group_sensitivity = {"low": 1.6, "middle": 1.0, "high": 0.6}[self.income_group]
-        util = income_utility * (1.0 / group_sensitivity) + green_pref - rent_burden * 50.0 + social_component * 5.0
+        same = sum(1 for n in neighbors if getattr(n, "income_group", None) == self.income_group)
+        social_component = (same / len(neighbors)) * 4.0 if neighbors else 0.0
+
+        # --- 5. Combine ---
+        util = income_utility + green_pref - rent_burden * 40.0 + social_component
         return util
 
     def step(self):
@@ -38,7 +37,9 @@ class Household(Agent):
         current_cell = self.model.cell_map[current_pos]
         current_util = self.utility(current_cell)
 
-        if current_util < self.model.utility_threshold:
+        # High-income always consider moving (higher mobility)
+        if self.income_group == "high" or current_util < self.model.utility_threshold:
+
             best_cell = current_cell
             best_util = current_util
             candidates = self.model.sample_cells_around(current_pos, radius=self.model.move_search_radius, k=40)
