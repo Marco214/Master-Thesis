@@ -164,13 +164,34 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         persist_years=persist_years
     )
 
+    # berechne Mietschwelle und Mietwert zum Kippzeitpunkt (falls vorhanden)
+    rent_threshold = None
+    rent_at_kipp = None
+    try:
+        rent_threshold = float(baseline_rent * rent_rel_threshold)
+    except Exception:
+        rent_threshold = None
+
+    if kipp and kipp_time is not None and 'avg_rent' in df.columns and len(df) > kipp_time:
+        try:
+            rent_at_kipp = float(df['avg_rent'].iloc[int(kipp_time)])
+        except Exception:
+            rent_at_kipp = None
+
     if export:
         fname = os.path.join(params.get('out_dir', 'results'),
                              f"run_size{params.get('park_size')}_qual{params.get('park_quality')}_prox{params.get('decay_scale')}_func{params.get('park_function')}_seed{seed}.csv")
         ensure_dir(os.path.dirname(fname))
         df.to_csv(fname, index=False)
 
-    return {'kipp': kipp, 'kipp_time': kipp_time, 'df': df}
+    return {
+        'kipp': kipp,
+        'kipp_time': kipp_time,
+        'df': df,
+        'rent_threshold': rent_threshold,
+        'rent_at_kipp': rent_at_kipp
+    }
+
 
 # -------------------------
 # Worker wrapper für multiprocessing (muss top-level sein)
@@ -201,7 +222,9 @@ def _worker_task(task):
             'run_idx': run_idx,
             'seed': seed,
             'kipp': res['kipp'],
-            'kipp_time': res['kipp_time']
+            'kipp_time': res['kipp_time'],
+            'rent_threshold': res.get('rent_threshold'),
+            'rent_at_kipp': res.get('rent_at_kipp')
         }
     except Exception as e:
         # im Fehlerfall zurückgeben, damit Aggregation robust bleibt
@@ -221,7 +244,7 @@ def _worker_task(task):
 # Grid sweep orchestrator mit multiprocessing
 # -------------------------
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=1, steps=30,
+                       n_runs=5, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None):
     """
@@ -230,6 +253,9 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     """
     ensure_dir(out_dir)
     results = []
+
+    # Startzeit für Grid‑Sweep messen
+    start_time = time.perf_counter()
 
     # Erzeuge alle Tasks
     tasks = []
@@ -306,19 +332,37 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                 grouped = df_partial.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
                 partial_rows = []
                 for name, group in grouped:
+                    # innerhalb: for name, group in grouped:
                     size, quality, proximity, park_function = name
                     kipp_count = int(group['kipp'].sum())
                     n_runs_actual = len(group)
+
                     kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
                     p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
-                    median_kipp_time = int(np.median(kipp_times)) if len(kipp_times) > 0 else None
+                    median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
+
+                    rent_threshold_vals = group['rent_threshold'].dropna().astype(
+                        float).tolist() if 'rent_threshold' in group else []
+                    rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
+                    rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(
+                        float).tolist() if 'rent_at_kipp' in group else []
+                    rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
+
+                    # Runden auf 2 Nachkommastellen; None -> np.nan
+                    p_kipp_out = round(p_kipp, 2)
+                    median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
+                    rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
+                    rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
+
                     partial_rows.append({
                         'park_size': size,
                         'park_quality': quality,
                         'decay_scale': proximity,
                         'park_function': park_function,
-                        'p_kipp': p_kipp,
-                        'median_kipp_time': median_kipp_time,
+                        'p_kipp': p_kipp_out,
+                        'median_kipp_time': median_kipp_time_out,
+                        'rent_threshold': rent_threshold_out,
+                        'rent_at_kipp': rent_at_kipp_out,
                         'n_runs': n_runs_actual
                     })
 
@@ -349,16 +393,32 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         n_runs_actual = len(group)
         kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
         p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
-        median_kipp_time = int(np.median(kipp_times)) if len(kipp_times) > 0 else None
+        median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
+
+        rent_threshold_vals = group['rent_threshold'].dropna().astype(
+            float).tolist() if 'rent_threshold' in group else []
+        rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
+        rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
+        rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
+
+        # Runden auf 2 Nachkommastellen; None -> np.nan
+        p_kipp_out = round(p_kipp, 2)
+        median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
+        rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
+        rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
+
         results.append({
             'park_size': size,
             'park_quality': quality,
             'decay_scale': proximity,
             'park_function': park_function,
-            'p_kipp': p_kipp,
-            'median_kipp_time': median_kipp_time,
+            'p_kipp': p_kipp_out,
+            'median_kipp_time': median_kipp_time_out,
+            'rent_threshold': rent_threshold_out,
+            'rent_at_kipp': rent_at_kipp_out,
             'n_runs': n_runs_actual
         })
+
         # optional: save intermediate results
         df_res = pd.DataFrame(results)
         df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
@@ -366,8 +426,27 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     # final save
     df_final = pd.DataFrame(results)
     df_final.to_csv(os.path.join(out_dir, "grid_results.csv"), index=False)
-    elapsed = time.time() - (min([t[5] for t in tasks]) if tasks else time.time())  # dummy baseline
-    print(f"Grid sweep finished. Total jobs: {total_jobs}. Results saved to {out_dir}")
+    # Laufzeit berechnen (perf_counter für hohe Genauigkeit)
+    elapsed = time.perf_counter() - start_time
+    # formatiere als hh:mm:ss
+    hrs, rem = divmod(elapsed, 3600)
+    mins, secs = divmod(rem, 60)
+    elapsed_str = f"{int(hrs):02d}:{int(mins):02d}:{secs:05.2f}"
+
+    # Ausgabe in Konsole
+    print(f"Grid sweep finished. Total jobs: {total_jobs}. Elapsed time: {elapsed_str}. Results saved to {out_dir}")
+
+    # optional: schreibe Run‑Metadaten in eine kleine Datei
+    try:
+        info_path = os.path.join(out_dir, "run_info.txt")
+        with open(info_path, "w") as fh:
+            fh.write(f"finished_at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            fh.write(f"total_jobs: {total_jobs}\n")
+            fh.write(f"elapsed_seconds: {elapsed:.4f}\n")
+            fh.write(f"elapsed_hms: {elapsed_str}\n")
+    except Exception:
+        pass
+
     return df_final
 
 # -------------------------
@@ -410,13 +489,15 @@ def example_run():
     out_dir = "../output/experiments"
     ensure_dir(out_dir)
 
-    size_values = [1000, 5000, 10000, 50000, 100000]
-    quality_values = [0.1, 0.3, 0.5, 0.7, 0.9]
-    proximity_values = [0.5, 1.0, 2.0, 4.0]  # decay_scale
+    run_start = time.perf_counter()
+
+    size_values = [1000, 10000, 50000, 100000]
+    quality_values = [0.2, 0.4, 0.6, 0.8]
+    proximity_values = [0.5, 2.0, 4.0]  # decay_scale
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=1, steps=30,
+                                 n_runs=5, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000}, base_seed=42, n_workers=None)
 
@@ -436,7 +517,6 @@ def example_run():
             out_file_p = os.path.join(out_dir, f"heatmap_p_kipp_prox_{prox}_func_{func}.png")
             plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality', value_col='p_kipp',
                                    out_file=out_file_p, x_log=False, y_log=False, cmap='viridis')
-            print(f"[HEATMAP] p_kipp heatmap saved: {out_file_p}")
 
             # 2) Heatmap median_kipp_time
             # Prüfen, ob es überhaupt median-Werte gibt
@@ -455,7 +535,12 @@ def example_run():
                                    value_col='median_kipp_time', out_file=out_file_median,
                                    x_log=False, y_log=False, cmap='magma')
 
-    print("Example run finished. Outputs in:", out_dir)
+    # Gesamtlaufzeit für example_run
+    run_elapsed = time.perf_counter() - run_start
+    hrs, rem = divmod(run_elapsed, 3600)
+    mins, secs = divmod(rem, 60)
+    run_elapsed_str = f"{int(hrs):02d}:{int(mins):02d}:{secs:05.2f}"
+    print(f"Example run finished. Outputs in: {out_dir}. Total elapsed: {run_elapsed_str}")
 
 if __name__ == "__main__":
     example_run()
