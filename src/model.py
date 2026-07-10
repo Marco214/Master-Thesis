@@ -43,7 +43,7 @@ DEFAULTS = {
     "utility_threshold": 20,
     "seed": None,
     # heatmap export params
-    "export_every": 3,
+    "export_every": 5,
     "out_dir": "../output/heatmaps",
     # MCDA weights for UGS attributes (from literature)
     "w_proximity": 0.40,
@@ -52,6 +52,14 @@ DEFAULTS = {
     "w_function": 0.25,
     # Hedonic capitalization parameter (beta_ugs)
     "beta_ugs": 0.2,
+    # park-cost parameter
+    "enable_park_costs": True,                      # Kostenberechnung an/aus
+    "apply_costs_to_rents": True,                   # ob jährliche Betriebskosten auf Mieter umgelegt werden
+    "cost_invest_per_m2": 60.0,                     # einmalige Investitionskosten pro m2 (z.B. $/m2)
+    "cost_operational_per_m2_per_year": 1.8,        # jährliche Betriebskosten pro m2 (z.B. $/m2/Jahr)
+    "quality_invest_multiplier": 0.5,               # zusätzlicher Investitionsfaktor pro Qualitätspunkt (0..1)
+    "quality_operational_multiplier": 0.3,          # zusätzlicher Betriebsfaktor pro Qualitätspunkt (0..1)
+    "cost_decay_scale": None,                       # optional: eigener Decay für Kostenverteilung (None -> wie compute_green_scores)
 }
 
 # -------------------------
@@ -79,7 +87,18 @@ class UGS:
         self.pos = pos
         self.size = size_m2
         self.quality = clamp(quality, 0.0, 1.0)   # 0..1
-        self.function = function                        #recreation, sports, greenway
+        self.function = function                        # recreation, sports, greenway
+        self.investment_cost = 0.0
+        self.annual_operational_cost = 0.0
+
+    def compute_costs(self, cost_invest_per_m2, cost_operational_per_m2_per_year,
+                      quality_invest_multiplier=0.0, quality_operational_multiplier=0.0):
+        """
+        Berechne einmalige Investitionskosten und jährliche Betriebskosten.
+        Beide Komponenten hängen linear von Größe (m2) ab und werden durch Qualität skaliert.
+        """
+        self.investment_cost = self.size * cost_invest_per_m2 * (1.0 + self.quality * quality_invest_multiplier)
+        self.annual_operational_cost = self.size * cost_operational_per_m2_per_year * (1.0 + self.quality * quality_operational_multiplier)
 
 # -------------------------
 # Cell object stored in cell_map
@@ -121,12 +140,23 @@ class GreenGentModel(Model):
         self.schedule = RandomActivation(self)
         self.running = True
 
-        # parameters
+        # gentrification parameters
         self.green_attraction = params["green_attraction"]
         self.demand_price_elasticity = params["demand_price_elasticity"]
         self.utility_threshold = params["utility_threshold"]
         self.move_search_radius = params["move_search_radius"]
         self.beta_ugs = params.get("beta_ugs", DEFAULTS["beta_ugs"])
+
+        # cost parameters
+        self.enable_park_costs = params.get("enable_park_costs", DEFAULTS["enable_park_costs"])
+        self.apply_costs_to_rents = params.get("apply_costs_to_rents", DEFAULTS["apply_costs_to_rents"])
+        self.cost_invest_per_m2 = params.get("cost_invest_per_m2", DEFAULTS["cost_invest_per_m2"])
+        self.cost_operational_per_m2_per_year = params.get("cost_operational_per_m2_per_year",
+                                                           DEFAULTS["cost_operational_per_m2_per_year"])
+        self.quality_invest_multiplier = params.get("quality_invest_multiplier", DEFAULTS["quality_invest_multiplier"])
+        self.quality_operational_multiplier = params.get("quality_operational_multiplier",
+                                                         DEFAULTS["quality_operational_multiplier"])
+        self.cost_decay_scale = params.get("cost_decay_scale", DEFAULTS["cost_decay_scale"])
 
         # UGS attribute weights (MCDA)
         self.w_prox = params.get("w_proximity", DEFAULTS["w_proximity"])
@@ -156,10 +186,22 @@ class GreenGentModel(Model):
             px = random.randrange(self.width)
             py = random.randrange(self.height)
             size = random.choice([DEFAULTS["park_size_small"], DEFAULTS["park_size_medium"],
-                                  DEFAULTS["park_size_large"]])  # sizes in m2 for small, medium and large parks
+                                  DEFAULTS["park_size_large"]])
             quality = clamp(random.gauss(0.7, 0.30))
             function = random.choice(["recreation", "sports", "greenway"])
-            self.parks.append(UGS((px, py), size, quality, function))
+            park = UGS((px, py), size, quality, function)
+
+            # Kosten berechnen (falls aktiviert)
+            if self.enable_park_costs:
+                park.compute_costs(self.cost_invest_per_m2,
+                                   self.cost_operational_per_m2_per_year,
+                                   self.quality_invest_multiplier,
+                                   self.quality_operational_multiplier)
+            self.parks.append(park)
+
+        # Summen initial berechnen
+        self.total_investment = self.compute_total_investment()
+        self.total_annual_operational = self.compute_total_annual_operational()
 
         # spawn agents, generate incomes
         self.df = pd.read_csv("../income/income_clean.csv") # share of income_group over all agents (values from https://www.ssa.gov/cgi-bin/netcomp.cgi?year=2022)
@@ -196,11 +238,62 @@ class GreenGentModel(Model):
                 "avg_rent": lambda m: m.average_rent(),
                 "avg_green": lambda m: m.average_green(),
                 "high_local": lambda m: m.local_high_income_share(),
+                "total_investment": lambda m: m.total_investment if m.enable_park_costs else 0.0,
+                "annual_operational_costs": lambda m: m.total_annual_operational if m.enable_park_costs else 0.0,
             }
         )
 
         # collect initial state so datacollector is not empty
         self.datacollector.collect(self)
+
+    # -------------------------
+    # Methoden zur Kostenberechnung / Verteilung
+    # -------------------------
+    def compute_total_investment(self):
+        if not self.enable_park_costs:
+            return 0.0
+        return float(sum(p.investment_cost for p in self.parks))
+
+    def compute_total_annual_operational(self):
+        if not self.enable_park_costs:
+            return 0.0
+        return float(sum(p.annual_operational_cost for p in self.parks))
+
+    def allocate_operational_costs_to_cells(self, decay_scale=None):
+        """
+        Berechne für jede Zelle den jährlichen Anteil an Park-Betriebskosten.
+        Verteilung erfolgt gewichtet nach proximity (exponentieller Decay).
+        Rückgabe: dict mapping cell.pos -> annual_cost_share (float)
+        """
+        if not self.enable_park_costs:
+            return {pos: 0.0 for pos in self.cell_map.keys()}
+
+        if decay_scale is None:
+            decay_scale = self.cost_decay_scale if self.cost_decay_scale is not None else max(self.width,
+                                                                                              self.height) / 4.0
+
+        # initialisiere Kostenanteile
+        cell_costs = {pos: 0.0 for pos in self.cell_map.keys()}
+
+        # für jeden Park: berechne Proximity-Gewichte zu allen Zellen und verteile die park.annual_operational_cost
+        for park in self.parks:
+            # sammle prox-Werte
+            prox_list = []
+            cells = []
+            for (x, y), cell in self.cell_map.items():
+                dist = math.hypot(park.pos[0] - x, park.pos[1] - y)
+                prox = math.exp(-dist / decay_scale)
+                prox_list.append(prox)
+                cells.append((x, y))
+            total_prox = sum(prox_list)
+            if total_prox <= 0:
+                continue
+            # verteile die jährlichen Kosten proportional zu prox
+            for (pos, prox) in zip(cells, prox_list):
+                share = (prox / total_prox) * park.annual_operational_cost
+                cell_costs[pos] += share
+
+        return cell_costs
 
     # -------------------------
     # MCDA + proximity: compute green_score per cell
@@ -372,7 +465,15 @@ class GreenGentModel(Model):
         cbar = plt.colorbar(mesh, ax=ax)
         cbar.set_label(label, fontsize=12)
 
-        # overlay park centroids and size/quality markers ON TOP of the mesh
+        # helper: formatiere Geldwerte kompakt
+        def fmt_money(x):
+            if x >= 1e6:
+                return f"${x / 1e6:.1f}M"
+            if x >= 1e3:
+                return f"${x / 1e3:.0f}k"
+            return f"${x:.0f}"
+
+        # overlay park centroids and size/quality/cost markers ON TOP of the mesh
         if overlay_parks and len(self.parks) > 0:
             for park in self.parks:
                 px, py = park.pos
@@ -389,9 +490,24 @@ class GreenGentModel(Model):
 
                 ax.scatter(cx, cy, c='lime', s=size_marker, edgecolors='k',
                            linewidths=0.5, marker='o', zorder=3)
-                ax.text(cx + 0.2, cy + 0.2, f"q={park.quality:.2f}\nf={park.function}",
+
+                # Basistext: quality und function (wie bisher)
+                lines = [f"q={park.quality:.2f}", f"f={park.function}"]
+
+                # falls Kosten aktiviert: Investitions- und Betriebskosten hinzufügen
+                if getattr(self, "enable_park_costs", False):
+                    inv = getattr(park, "investment_cost", None)
+                    op = getattr(park, "annual_operational_cost", None)
+                    if inv is not None:
+                        lines.append(f"Inv: {fmt_money(inv)}")
+                    if op is not None:
+                        lines.append(f"Op/Y: {fmt_money(op)}")
+
+                # kombiniere in einer kompakten Textbox (max 3 Zeilen, kürze bei Bedarf)
+                text = "\n".join(lines)
+                ax.text(cx + 0.2, cy + 0.2, text,
                         color='white', fontsize=6, zorder=4,
-                        bbox=dict(facecolor='black', alpha=0.5, pad=1))
+                        bbox=dict(facecolor='black', alpha=0.6, pad=1))
 
         plt.title(title)
         plt.tight_layout()
@@ -436,13 +552,29 @@ class GreenGentModel(Model):
     # -------------------------
     def step(self):
         self.schedule.step()
+
+        # aktualisiere Basisrenten (wie bisher)
         for cell in self.cell_map.values():
             demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
-            # base rent drift influenced by occupancy and green_score
             drift = 1.0 + 0.003 * math.log1p(demand_factor) + 0.002 * cell.green_score
             cell.base_rent *= drift
 
-            #print(f"Cell {cell.pos}-> base_rent:{round(cell.base_rent, 1)}, Green-Score:{round(cell.green_score, 2)}")
+        # falls Kosten aktiviert: aktualisiere Summen und (optional) verteile Betriebskosten auf Haushalte
+        if self.enable_park_costs:
+            self.total_investment = self.compute_total_investment()
+            self.total_annual_operational = self.compute_total_annual_operational()
+
+            if self.apply_costs_to_rents:
+                # berechne jährliche Kostenanteile pro Zelle
+                cell_annual_costs = self.allocate_operational_costs_to_cells()
+                # wandle in monatliche Kosten pro Haushalt um und addiere als Zuschlag zur base_rent
+                for pos, cell in self.cell_map.items():
+                    annual_cost = cell_annual_costs.get(pos, 0.0)
+                    # falls keine Haushalte: wir verteilen trotzdem auf die Zelle, aber pro-Haushalt wäre 0
+                    if cell.occupancy > 0:
+                        monthly_per_household = (annual_cost / max(1, cell.occupancy)) / 12.0
+                        # addiere den Zuschlag zur base_rent (alternativ könnte man einen separaten Steuer-/Abgabe-Faktor verwenden)
+                        cell.base_rent += monthly_per_household
 
         # collect data
         self.datacollector.collect(self)
@@ -482,4 +614,4 @@ class GreenGentModel(Model):
         for step in range(steps):
             self.step()
             #if (step % self.export_every) == 0:
-                #self.export_heatmaps(step)
+               # self.export_heatmaps(step)

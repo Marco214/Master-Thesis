@@ -34,9 +34,6 @@ def detect_tipping_local(model, baseline_rent,
     """
     Kipppunktprüfung basierend auf lokalem Anteil High-Income-Haushalte
     in der Nachbarschaft eines Parks.
-
-    Annahme: model.datacollector sammelt pro Timestep einen Reporter "high_local"
-    (wie in deinem model.py: lambda m: m.local_high_income_share()).
     """
     df = model.datacollector.get_model_vars_dataframe().reset_index(drop=True)
     if df.empty:
@@ -84,7 +81,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
     """
     params: dict with keys that will be passed to GreenGentModel (e.g., park_size, park_quality, decay_scale, park_function)
     seed: int
-    returns: dict with run result (kipp, kipp_time, df)
+    returns: dict with run result (kipp, kipp_time, df, investment_cost, annual_operational_cost)
     """
     # deterministische Seeds für Reproduzierbarkeit
     if seed is not None:
@@ -117,9 +114,41 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
                     self.size = size_m2
                     self.quality = quality
                     self.function = function
+                    self.investment_cost = 0.0
+                    self.annual_operational_cost = 0.0
             ugs_cls = _UGS_fallback
 
-        model.parks.append(ugs_cls((px, py), size, quality, function))
+        # append park
+        new_park = ugs_cls((px, py), size, quality, function)
+        model.parks.append(new_park)
+
+        # --- WICHTIG: Falls das Modell Kosten aktiviert hat, berechne Kosten für den neuen Park
+        if getattr(model, "enable_park_costs", False):
+            invest_per_m2 = getattr(model, "cost_invest_per_m2", None)
+            op_per_m2 = getattr(model, "cost_operational_per_m2_per_year", None)
+            q_inv_mult = getattr(model, "quality_invest_multiplier", 0.0)
+            q_op_mult = getattr(model, "quality_operational_multiplier", 0.0)
+
+            if hasattr(new_park, "compute_costs") and invest_per_m2 is not None and op_per_m2 is not None:
+                new_park.compute_costs(invest_per_m2, op_per_m2, q_inv_mult, q_op_mult)
+            else:
+                # Fallback: set Attribute manuell, falls compute_costs nicht vorhanden
+                new_park.investment_cost = new_park.size * (invest_per_m2 if invest_per_m2 is not None else 0.0) * (
+                            1.0 + new_park.quality * q_inv_mult)
+                new_park.annual_operational_cost = new_park.size * (op_per_m2 if op_per_m2 is not None else 0.0) * (
+                            1.0 + new_park.quality * q_op_mult)
+
+            # Aktualisiere aggregierte Summen im Model
+            if hasattr(model, "compute_investment_cost"):
+                model.investment_cost = model.compute_investment_cost()
+            else:
+                model.investment_cost = float(sum(getattr(p, "investment_cost", 0.0) for p in model.parks))
+
+            if hasattr(model, "compute_annual_operational_cost"):
+                model.annual_operational_cost = model.compute_annual_operational_cost()
+            else:
+                model.annual_operational_cost = float(
+                    sum(getattr(p, "annual_operational_cost", 0.0) for p in model.parks))
 
         decay = params.get('decay_scale', None)
         if hasattr(model, 'compute_green_scores'):
@@ -150,8 +179,14 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
     # collect time series
     df = model.datacollector.get_model_vars_dataframe().reset_index(drop=True)
 
+    # --- Gesamtkosten aus dem Modell lesen (falls vorhanden) ---
+    investment_cost = getattr(model, "investment_cost", None)
+    annual_operational_cost = getattr(model, "annual_operational_cost", None)
+
     if df.empty or 'avg_rent' not in df.columns:
-        return {'kipp': False, 'kipp_time': None, 'df': df}
+        return {'kipp': False, 'kipp_time': None, 'df': df,
+                'investment_cost': investment_cost,
+                'annual_operational_cost': annual_operational_cost}
     baseline_rent = df['avg_rent'].iloc[0]
 
     kipp, kipp_time = detect_tipping_local(
@@ -189,7 +224,9 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         'kipp_time': kipp_time,
         'df': df,
         'rent_threshold': rent_threshold,
-        'rent_at_kipp': rent_at_kipp
+        'rent_at_kipp': rent_at_kipp,
+        'investment_cost': investment_cost,
+        'annual_operational_cost': annual_operational_cost
     }
 
 
@@ -213,7 +250,24 @@ def _worker_task(task):
         'out_dir': out_dir
     }
     try:
-        res = run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years, export=False)
+        res = run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years,
+                                    export=False)
+
+        # Lese die vom Modell berechneten Summen (können None sein)
+        total_inv = res.get('investment_cost', None)
+        total_op = res.get('annual_operational_cost', None)
+
+        # Runde auf ganze Zahlen, falls Werte vorhanden
+        try:
+            total_inv_out = int(round(float(total_inv))) if total_inv is not None else None
+        except Exception:
+            total_inv_out = None
+
+        try:
+            total_op_out = int(round(float(total_op))) if total_op is not None else None
+        except Exception:
+            total_op_out = None
+
         return {
             'park_size': size,
             'park_quality': quality,
@@ -224,10 +278,13 @@ def _worker_task(task):
             'kipp': res['kipp'],
             'kipp_time': res['kipp_time'],
             'rent_threshold': res.get('rent_threshold'),
-            'rent_at_kipp': res.get('rent_at_kipp')
+            'rent_at_kipp': res.get('rent_at_kipp'),
+            'investment_cost': total_inv_out,
+            'annual_operational_cost': total_op_out
         }
+
     except Exception as e:
-        # im Fehlerfall zurückgeben, damit Aggregation robust bleibt
+        # Falls ein Fehler auftritt, gib eine robuste Struktur zurück (ohne Zugriff auf res)
         return {
             'park_size': size,
             'park_quality': quality,
@@ -237,14 +294,17 @@ def _worker_task(task):
             'seed': seed,
             'kipp': False,
             'kipp_time': None,
-            'error': str(e)
+            'error': str(e),
+            'investment_cost': None,
+            'annual_operational_cost': None
         }
+
 
 # -------------------------
 # Grid sweep orchestrator mit multiprocessing
 # -------------------------
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=5, steps=50,
+                       n_runs=50, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None):
     """
@@ -260,16 +320,52 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     # Erzeuge alle Tasks
     tasks = []
     job_counter = 0
-    for size in size_values:
-        for quality in quality_values:
-            for proximity in proximity_values:
-                for park_function in function_values:
-                    for run_idx in range(n_runs):
-                        seed = int(base_seed) + job_counter + run_idx
-                        task = (size, quality, proximity, park_function, run_idx, seed,
-                                model_base_kwargs or {}, steps, rent_rel_threshold, income_shift_threshold, persist_years, out_dir)
-                        tasks.append(task)
-                    job_counter += n_runs
+
+    # Wenn enable_park_costs in model_base_kwargs True ist, teste nur die 4 Kostenkombinationen
+    enable_costs = False
+    if model_base_kwargs and isinstance(model_base_kwargs, dict):
+        enable_costs = bool(model_base_kwargs.get('enable_park_costs', False))
+
+    if enable_costs:
+        # feste proximity und function wie gewünscht
+        fixed_proximity = 2.0
+        fixed_function = "recreation"
+
+        # Definiere die 4 Szenarien: (size, quality, cost_invest_per_m2, cost_operational_per_m2_per_year)
+        combos = [
+            (100000, 0.8, 80.0, 2.5),  # High Invest + High Op
+            (100000, 0.4, 80.0, 1.0),  # High Invest + Low Op
+            (10000, 0.8, 40.0, 2.5),   # Low Invest + High Op
+            (10000, 0.4, 40.0, 1.0),   # Low Invest + Low Op
+        ]
+
+        for (size, quality, invest_cost, op_cost) in combos:
+            for run_idx in range(n_runs):
+                seed = int(base_seed) + job_counter + run_idx
+
+                # Kopiere model_base_kwargs und ergänze die kosten-spezifischen Parameter
+                mbk = (model_base_kwargs.copy() if model_base_kwargs is not None else {}).copy()
+                mbk['enable_park_costs'] = True
+                mbk['cost_invest_per_m2'] = invest_cost
+                mbk['cost_operational_per_m2_per_year'] = op_cost
+
+                task = (size, quality, fixed_proximity, fixed_function, run_idx, seed,
+                        mbk, steps, rent_rel_threshold, income_shift_threshold, persist_years, out_dir)
+                tasks.append(task)
+            job_counter += n_runs
+    else:
+        # ursprüngliche vollständige Grid-Erzeugung
+        for size in size_values:
+            for quality in quality_values:
+                for proximity in proximity_values:
+                    for park_function in function_values:
+                        for run_idx in range(n_runs):
+                            seed = int(base_seed) + job_counter + run_idx
+                            task = (size, quality, proximity, park_function, run_idx, seed,
+                                    model_base_kwargs or {}, steps, rent_rel_threshold, income_shift_threshold,
+                                    persist_years, out_dir)
+                            tasks.append(task)
+                        job_counter += n_runs
 
     total_jobs = len(tasks)
     if total_jobs == 0:
@@ -332,7 +428,6 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                 grouped = df_partial.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
                 partial_rows = []
                 for name, group in grouped:
-                    # innerhalb: for name, group in grouped:
                     size, quality, proximity, park_function = name
                     kipp_count = int(group['kipp'].sum())
                     n_runs_actual = len(group)
@@ -354,16 +449,25 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                     rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
                     rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
 
+                    invest_vals = group['investment_cost'].dropna().astype(
+                        float).tolist() if 'investment_cost' in group else []
+                    op_vals = group['annual_operational_cost'].dropna().astype(
+                        float).tolist() if 'annual_operational_cost' in group else []
+                    invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
+                    op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
+
                     partial_rows.append({
-                        'park_size': size,
-                        'park_quality': quality,
-                        'decay_scale': proximity,
-                        'park_function': park_function,
-                        'p_kipp': p_kipp_out,
-                        'median_kipp_time': median_kipp_time_out,
-                        'rent_threshold': rent_threshold_out,
-                        'rent_at_kipp': rent_at_kipp_out,
-                        'n_runs': n_runs_actual
+                            'size': size,
+                            'quality': quality,
+                            'proximity': proximity,
+                            'function': park_function,
+                            'investment_cost': invest_cost_out,
+                            'annual_operational_cost': op_cost_out,
+                            'p_kipp': p_kipp_out,
+                            'median_kipp_time': median_kipp_time_out,
+                            'rent_threshold': rent_threshold_out,
+                            'rent_at_kipp': rent_at_kipp_out,
+                            'n_runs': n_runs_actual
                     })
 
                 df_partial_out = pd.DataFrame(partial_rows)
@@ -407,16 +511,24 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
         rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
 
+        invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
+        op_vals = group['annual_operational_cost'].dropna().astype(
+            float).tolist() if 'annual_operational_cost' in group else []
+        invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
+        op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
+
         results.append({
-            'park_size': size,
-            'park_quality': quality,
-            'decay_scale': proximity,
-            'park_function': park_function,
-            'p_kipp': p_kipp_out,
-            'median_kipp_time': median_kipp_time_out,
-            'rent_threshold': rent_threshold_out,
-            'rent_at_kipp': rent_at_kipp_out,
-            'n_runs': n_runs_actual
+                'size': size,
+                'quality': quality,
+                'proximity': proximity,
+                'function': park_function,
+                'investment_cost': invest_cost_out,
+                'annual_operational_cost': op_cost_out,
+                'p_kipp': p_kipp_out,
+                'median_kipp_time': median_kipp_time_out,
+                'rent_threshold': rent_threshold_out,
+                'rent_at_kipp': rent_at_kipp_out,
+                'n_runs': n_runs_actual
         })
 
         # optional: save intermediate results
@@ -497,43 +609,68 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=5, steps=50,
+                                 n_runs=50, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
-                                 out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000}, base_seed=42, n_workers=None)
+                                 out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': True}, base_seed=42, n_workers=None)
 
-    # plot 2D slices: p_kipp and median_kipp_time over size x quality for each proximity and function
-    for prox in proximity_values:
-        for func in function_values:
-            df_slice = df_grid[(df_grid['decay_scale'] == prox) & (df_grid['park_function'] == func)]
-            if df_slice.empty:
-                continue
+    # -------------------------
+    # Wenn Kosten-Szenarien aktiv sind: nur 2 Heatmaps für die 4 Kostenvarianten
+    # -------------------------
+    if 'investment_cost' in df_grid.columns and 'annual_operational_cost' in df_grid.columns:
+        df_costs = df_grid.dropna(subset=['investment_cost', 'annual_operational_cost']).copy()
 
-            # gemeinsame Vorverarbeitung
-            df_slice = df_slice.copy()
-            # p_kipp sollte numerisch vorliegen; median_kipp_time: None -> NaN
-            df_slice['median_kipp_time'] = df_slice['median_kipp_time'].apply(lambda x: np.nan if x is None else x)
+        if not df_costs.empty:
+            # Runde Kosten auf ganze Zahlen (falls nicht bereits gerundet)
+            df_costs['investment_cost'] = df_costs['investment_cost'].astype(float).round().astype(int)
+            df_costs['annual_operational_cost'] = df_costs['annual_operational_cost'].astype(float).round().astype(int)
 
-            # 1) Heatmap p_kipp
-            out_file_p = os.path.join(out_dir, f"heatmap_p_kipp_prox_{prox}_func_{func}.png")
-            plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality', value_col='p_kipp',
-                                   out_file=out_file_p, x_log=False, y_log=False, cmap='viridis')
+            # Aggregation: p_kipp mean, median_kipp_time median
+            agg = df_costs.groupby(['investment_cost', 'annual_operational_cost']).agg(
+                p_kipp_mean = ('p_kipp', 'mean'),
+                median_kipp_time_med = ('median_kipp_time', lambda s: np.nanmedian(s.dropna().astype(float)))
+            ).reset_index()
 
-            # 2) Heatmap median_kipp_time
-            # Prüfen, ob es überhaupt median-Werte gibt
-            if df_slice['median_kipp_time'].dropna().empty:
-                print(f"[INFO] Keine median_kipp_time Werte für prox={prox}, func={func}; übersprungen.")
-                continue
+            # Pivot für Heatmaps: Investition (x) vs Betrieb (y)
+            pivot_p = agg.pivot_table(index='annual_operational_cost', columns='investment_cost', values='p_kipp_mean', aggfunc='mean')
+            pivot_m = agg.pivot_table(index='annual_operational_cost', columns='investment_cost', values='median_kipp_time_med', aggfunc='mean')
 
-            # Optional: automatische vmin/vmax anhand Quantile für bessere Kontraste
-            vmin = float(df_slice['median_kipp_time'].dropna().quantile(0.05))
-            vmax = float(df_slice['median_kipp_time'].dropna().quantile(0.95))
+            # Sortiere Achsen (aufsteigend)
+            pivot_p = pivot_p.reindex(index=sorted(pivot_p.index), columns=sorted(pivot_p.columns))
+            pivot_m = pivot_m.reindex(index=sorted(pivot_m.index), columns=sorted(pivot_m.columns))
 
-            out_file_median = os.path.join(out_dir, f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png")
-            # plot_heatmap_from_grid akzeptiert derzeit kein vmin/vmax-Argument;
-            # falls du vmin/vmax nutzen willst, erweitere plot_heatmap_from_grid oder setze sie global.
-            plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality',
-                                   value_col='median_kipp_time', out_file=out_file_median,
-                                   x_log=False, y_log=False, cmap='magma')
+            # Plot helper
+            def save_cost_heatmap(pivot_df, title, cbar_label, fname, cmap='viridis'):
+                plt.figure(figsize=(6, 5))
+                im = plt.imshow(pivot_df.values, origin='lower', aspect='auto', cmap=cmap)
+                cbar = plt.colorbar(im)
+                cbar.set_label(cbar_label)
+                x_vals = list(pivot_df.columns)
+                y_vals = list(pivot_df.index)
+                plt.xticks(ticks=np.arange(len(x_vals)), labels=[f"{int(x):,}" for x in x_vals], rotation=45)
+                plt.yticks(ticks=np.arange(len(y_vals)), labels=[f"{int(y):,}" for y in y_vals])
+                plt.xlabel("Investitionskosten (gesamt) [$]")
+                plt.ylabel("Betriebskosten pro Jahr (gesamt) [$/Jahr]")
+                plt.title(title)
+                plt.tight_layout()
+                ensure_dir(os.path.dirname(fname) or ".")
+                plt.savefig(fname, dpi=150)
+                plt.close()
+
+            # Dateinamen
+            fname_p = os.path.join(out_dir, "heatmap_p_kipp_costs.png")
+            fname_m = os.path.join(out_dir, "heatmap_median_kipp_time_costs.png")
+
+            # Speichern (p_kipp: 0..1, median_kipp_time: Jahre)
+            save_cost_heatmap(pivot_p, "p_kipp über Kostenvarianten", "p_kipp (Wahrscheinlichkeit)", fname_p, cmap='viridis')
+            save_cost_heatmap(pivot_m, "Median Kippzeit über Kostenvarianten", "Median Kippzeit (Jahre)", fname_m, cmap='magma')
+
+            print(f"[INFO] Kosten-Heatmaps gespeichert: {fname_p}, {fname_m}")
+        else:
+            print("[WARN] Keine Runs mit investment_cost/annual_operational_cost gefunden; keine Kosten-Heatmaps erstellt.")
+    else:
+        # Fallback: falls keine Kosten-Spalten vorhanden sind, behalte das alte Verhalten
+        print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
+        # Optional: hier könntest du die alte Schleife wieder aktivieren, falls gewünscht.
 
     # Gesamtlaufzeit für example_run
     run_elapsed = time.perf_counter() - run_start
