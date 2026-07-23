@@ -25,8 +25,8 @@ from agent import Household
 # -------------------------
 DEFAULTS = {
     # grid parameter (values from Mauro)
-    "width": 9,
-    "height": 9,
+    "width": 7,
+    "height": 7,
     "n_agents": 1000,
     # park parameters
     "park_coverage": 0.12, # fraction of cells that become park centroids
@@ -53,8 +53,8 @@ DEFAULTS = {
     # Hedonic capitalization parameter (beta_ugs)
     "beta_ugs": 0.2,
     # park-cost parameter
-    "enable_park_costs": True,                      # Kostenberechnung an/aus
-    "apply_costs_to_rents": True,                   # ob jährliche Betriebskosten auf Mieter umgelegt werden
+    "enable_park_costs": False,                      # Kostenberechnung an/aus
+    "apply_costs_to_rents": False,                   # ob jährliche Betriebskosten auf Mieter umgelegt werden
     "cost_invest_per_m2": 60.0,                     # einmalige Investitionskosten pro m2 (z.B. $/m2)
     "cost_operational_per_m2_per_year": 1.8,        # jährliche Betriebskosten pro m2 (z.B. $/m2/Jahr)
     "quality_invest_multiplier": 0.5,               # zusätzlicher Investitionsfaktor pro Qualitätspunkt (0..1)
@@ -614,4 +614,4 @@ class GreenGentModel(Model):
         for step in range(steps):
             self.step()
             #if (step % self.export_every) == 0:
-               # self.export_heatmaps(step)
+                #self.export_heatmaps(step)

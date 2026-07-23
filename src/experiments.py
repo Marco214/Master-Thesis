@@ -30,7 +30,7 @@ def detect_tipping_local(model, baseline_rent,
                          neighborhood_radius=3,
                          rent_rel_threshold=1.10,
                          income_shift_threshold=0.003,
-                         persist_years=2):
+                         persist_years=3):
     """
     Kipppunktprüfung basierend auf lokalem Anteil High-Income-Haushalte
     in der Nachbarschaft eines Parks.
@@ -62,8 +62,8 @@ def detect_tipping_local(model, baseline_rent,
 
         # 1) Mietschwelle
         if rent_t >= baseline_rent_val * rent_rel_threshold:
-            end_idx = min(len(df), t + int(persist_years))
 
+            end_idx = min(len(df), t + int(persist_years))
             # 2) Persistenz
             if (df['avg_rent'].iloc[t:end_idx] >= baseline_rent_val * rent_rel_threshold).all():
 
@@ -304,57 +304,45 @@ def _worker_task(task):
 # Grid sweep orchestrator mit multiprocessing
 # -------------------------
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=50, steps=50,
-                       rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
-                       out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None):
+                       n_runs=1, steps=50,
+                       rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
+                       out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
+                       use_multiprocessing=False):
     """
-    Runs a 4D grid sweep over park size, quality, proximity (decay_scale) and park function.
-    Parallelisiert die unabhängigen Monte-Carlo-Runs mit multiprocessing.
+    Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially.
     """
     ensure_dir(out_dir)
     results = []
-
-    # Startzeit für Grid‑Sweep messen
     start_time = time.perf_counter()
 
-    # Erzeuge alle Tasks
     tasks = []
     job_counter = 0
 
-    # Wenn enable_park_costs in model_base_kwargs True ist, teste nur die 4 Kostenkombinationen
     enable_costs = False
     if model_base_kwargs and isinstance(model_base_kwargs, dict):
         enable_costs = bool(model_base_kwargs.get('enable_park_costs', False))
 
     if enable_costs:
-        # feste proximity und function wie gewünscht
         fixed_proximity = 2.0
         fixed_function = "recreation"
-
-        # Definiere die 4 Szenarien: (size, quality, cost_invest_per_m2, cost_operational_per_m2_per_year)
         combos = [
-            (100000, 0.8, 80.0, 2.5),  # High Invest + High Op
-            (100000, 0.4, 80.0, 1.0),  # High Invest + Low Op
-            (10000, 0.8, 40.0, 2.5),   # Low Invest + High Op
-            (10000, 0.4, 40.0, 1.0),   # Low Invest + Low Op
+            (100000, 0.8, 80.0, 2.5),
+            (100000, 0.4, 80.0, 1.0),
+            (10000, 0.8, 40.0, 2.5),
+            (10000, 0.4, 40.0, 1.0),
         ]
-
         for (size, quality, invest_cost, op_cost) in combos:
             for run_idx in range(n_runs):
                 seed = int(base_seed) + job_counter + run_idx
-
-                # Kopiere model_base_kwargs und ergänze die kosten-spezifischen Parameter
                 mbk = (model_base_kwargs.copy() if model_base_kwargs is not None else {}).copy()
                 mbk['enable_park_costs'] = True
                 mbk['cost_invest_per_m2'] = invest_cost
                 mbk['cost_operational_per_m2_per_year'] = op_cost
-
                 task = (size, quality, fixed_proximity, fixed_function, run_idx, seed,
                         mbk, steps, rent_rel_threshold, income_shift_threshold, persist_years, out_dir)
                 tasks.append(task)
             job_counter += n_runs
     else:
-        # ursprüngliche vollständige Grid-Erzeugung
         for size in size_values:
             for quality in quality_values:
                 for proximity in proximity_values:
@@ -371,91 +359,63 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     if total_jobs == 0:
         return pd.DataFrame(results)
 
-    # Anzahl Worker bestimmen
     cpu_count = multiprocessing.cpu_count() or 1
     if n_workers is None:
         n_workers = max(1, min(cpu_count, total_jobs))
     else:
         n_workers = max(1, min(n_workers, cpu_count, total_jobs))
 
-    # Verwende 'spawn' Kontext für bessere Kompatibilität (Windows)
-    ctx = multiprocessing.get_context('spawn')
-    pool = ctx.Pool(processes=n_workers)
-
-    # chunksize heuristisch setzen
-    chunksize = max(1, total_jobs // (n_workers * 4))
-
     raw_results = []
-    save_every = max(1, total_jobs // 20)  # z.B. alle ~5% der Jobs speichern
+    save_every = max(1, total_jobs // 20)
+    completed_counts = {}
+    printed_combos = set()
 
-    # Hilfsstruktur, um zu erkennen, welche Kombinationen bereits vollständig sind und bereits ausgegeben wurden
-    completed_counts = {}  # key -> number of finished runs for that combo
-    printed_combos = set()  # keys, die bereits ausgeprintet wurden
-
-    try:
-        for i, res in enumerate(pool.imap_unordered(_worker_task, tasks, chunksize)):
+    # --- Sequenzieller Modus ---
+    if not use_multiprocessing:
+        for i, task in enumerate(tasks):
+            res = _worker_task(task)
             raw_results.append(res)
 
-            # Update finished-count für die jeweilige Parameter-Kombi
             key = (res['park_size'], res['park_quality'], res['decay_scale'], res['park_function'])
             completed_counts[key] = completed_counts.get(key, 0) + 1
 
-            # Wenn alle erwarteten Runs für diese Kombination abgeschlossen sind und noch nicht ausgegeben wurden:
             if completed_counts[key] >= n_runs and key not in printed_combos:
-                # Aggregiere Ergebnisse nur für diese Kombination aus raw_results
                 combo_group = [r for r in raw_results
                                if (r['park_size'], r['park_quality'], r['decay_scale'], r['park_function']) == key]
-
                 kipp_count = sum(1 for r in combo_group if r.get('kipp') == True)
                 n_runs_actual = len(combo_group)
                 kipp_times = [float(r['kipp_time']) for r in combo_group if
                               r.get('kipp') == True and r.get('kipp_time') is not None]
                 p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
                 median_kipp_time = int(np.median(kipp_times)) if len(kipp_times) > 0 else None
-
-                # Drucke eine kompakte Ergebniszeile
                 print(f"[RESULT] size={key[0]:>7}  quality={key[1]:.2f}  decay={key[2]:.2f}  func={key[3]:>9}  "
                       f"p_kipp={p_kipp:.3f}  median_kipp_time={median_kipp_time}  runs={n_runs_actual}")
-
-                # Markiere als ausgegeben
                 printed_combos.add(key)
 
-            # periodisch Zwischenergebnisse speichern (aggregiert pro Parameter-Kombination)
             if (i + 1) % save_every == 0 or (i + 1) == total_jobs:
+                # gleiche Aggregations- und Speicherroutine wie im Original
                 df_partial = pd.DataFrame(raw_results)
-
-                # Aggregation auf Parameter-Kombinationsebene
                 grouped = df_partial.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
                 partial_rows = []
                 for name, group in grouped:
                     size, quality, proximity, park_function = name
                     kipp_count = int(group['kipp'].sum())
                     n_runs_actual = len(group)
-
                     kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
                     p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
                     median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
-
-                    rent_threshold_vals = group['rent_threshold'].dropna().astype(
-                        float).tolist() if 'rent_threshold' in group else []
+                    rent_threshold_vals = group['rent_threshold'].dropna().astype(float).tolist() if 'rent_threshold' in group else []
                     rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
-                    rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(
-                        float).tolist() if 'rent_at_kipp' in group else []
+                    rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
                     rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
-
-                    # Runden auf 2 Nachkommastellen; None -> np.nan
                     p_kipp_out = round(p_kipp, 2)
                     median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
                     rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
                     rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
-
-                    invest_vals = group['investment_cost'].dropna().astype(
-                        float).tolist() if 'investment_cost' in group else []
-                    op_vals = group['annual_operational_cost'].dropna().astype(
-                        float).tolist() if 'annual_operational_cost' in group else []
+                    invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
+                    op_vals = group['annual_operational_cost'].dropna().astype(float).tolist() if 'annual_operational_cost' in group else []
                     invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
                     op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
-
                     partial_rows.append({
                             'size': size,
                             'quality': quality,
@@ -469,28 +429,85 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                             'rent_at_kipp': rent_at_kipp_out,
                             'n_runs': n_runs_actual
                     })
-
                 df_partial_out = pd.DataFrame(partial_rows)
-
-                # atomar schreiben: zuerst temporär, dann ersetzen
                 tmp_path = os.path.join(out_dir, "grid_results_partial.tmp.csv")
                 df_partial_out.to_csv(tmp_path, index=False)
                 os.replace(tmp_path, os.path.join(out_dir, "grid_results_partial.csv"))
 
-    finally:
-        pool.close()
-        pool.join()
+    # --- Multiprocessing Modus (originale Logik) ---
+    else:
+        ctx = multiprocessing.get_context('spawn')
+        pool = ctx.Pool(processes=n_workers)
+        chunksize = max(1, total_jobs // (n_workers * 4))
+        try:
+            for i, res in enumerate(pool.imap_unordered(_worker_task, tasks, chunksize)):
+                raw_results.append(res)
+                key = (res['park_size'], res['park_quality'], res['decay_scale'], res['park_function'])
+                completed_counts[key] = completed_counts.get(key, 0) + 1
+                if completed_counts[key] >= n_runs and key not in printed_combos:
+                    combo_group = [r for r in raw_results
+                                   if (r['park_size'], r['park_quality'], r['decay_scale'], r['park_function']) == key]
+                    kipp_count = sum(1 for r in combo_group if r.get('kipp') == True)
+                    n_runs_actual = len(combo_group)
+                    kipp_times = [float(r['kipp_time']) for r in combo_group if
+                                  r.get('kipp') == True and r.get('kipp_time') is not None]
+                    p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
+                    median_kipp_time = int(np.median(kipp_times)) if len(kipp_times) > 0 else None
+                    print(f"[RESULT] size={key[0]:>7}  quality={key[1]:.2f}  decay={key[2]:.2f}  func={key[3]:>9}  "
+                          f"p_kipp={p_kipp:.3f}  median_kipp_time={median_kipp_time}  runs={n_runs_actual}")
+                    printed_combos.add(key)
+                if (i + 1) % save_every == 0 or (i + 1) == total_jobs:
+                    df_partial = pd.DataFrame(raw_results)
+                    grouped = df_partial.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
+                    partial_rows = []
+                    for name, group in grouped:
+                        size, quality, proximity, park_function = name
+                        kipp_count = int(group['kipp'].sum())
+                        n_runs_actual = len(group)
+                        kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
+                        p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
+                        median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
+                        rent_threshold_vals = group['rent_threshold'].dropna().astype(float).tolist() if 'rent_threshold' in group else []
+                        rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
+                        rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
+                        rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
+                        p_kipp_out = round(p_kipp, 2)
+                        median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
+                        rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
+                        rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
+                        invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
+                        op_vals = group['annual_operational_cost'].dropna().astype(float).tolist() if 'annual_operational_cost' in group else []
+                        invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
+                        op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
+                        partial_rows.append({
+                                'size': size,
+                                'quality': quality,
+                                'proximity': proximity,
+                                'function': park_function,
+                                'investment_cost': invest_cost_out,
+                                'annual_operational_cost': op_cost_out,
+                                'p_kipp': p_kipp_out,
+                                'median_kipp_time': median_kipp_time_out,
+                                'rent_threshold': rent_threshold_out,
+                                'rent_at_kipp': rent_at_kipp_out,
+                                'n_runs': n_runs_actual
+                        })
+                    df_partial_out = pd.DataFrame(partial_rows)
+                    tmp_path = os.path.join(out_dir, "grid_results_partial.tmp.csv")
+                    df_partial_out.to_csv(tmp_path, index=False)
+                    os.replace(tmp_path, os.path.join(out_dir, "grid_results_partial.csv"))
+        finally:
+            pool.close()
+            pool.join()
 
-    # Aggregation: gruppiere nach Parameter-Kombination
+    # --- gemeinsame Abschlussaggregation wie zuvor ---
     df_runs = pd.DataFrame(raw_results)
-    # Falls Fehler-Spalte existiert, optional speichern
     if 'error' in df_runs.columns:
         err_df = df_runs[df_runs['error'].notnull()]
         if not err_df.empty:
             err_df.to_csv(os.path.join(out_dir, "grid_errors.csv"), index=False)
 
     grouped = df_runs.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
-
     for name, group in grouped:
         size, quality, proximity, park_function = name
         kipp_count = int(group['kipp'].sum())
@@ -498,25 +515,18 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
         p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
         median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
-
-        rent_threshold_vals = group['rent_threshold'].dropna().astype(
-            float).tolist() if 'rent_threshold' in group else []
+        rent_threshold_vals = group['rent_threshold'].dropna().astype(float).tolist() if 'rent_threshold' in group else []
         rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
         rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
         rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
-
-        # Runden auf 2 Nachkommastellen; None -> np.nan
         p_kipp_out = round(p_kipp, 2)
         median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
         rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
         rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
-
         invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
-        op_vals = group['annual_operational_cost'].dropna().astype(
-            float).tolist() if 'annual_operational_cost' in group else []
+        op_vals = group['annual_operational_cost'].dropna().astype(float).tolist() if 'annual_operational_cost' in group else []
         invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
         op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
-
         results.append({
                 'size': size,
                 'quality': quality,
@@ -530,25 +540,17 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                 'rent_at_kipp': rent_at_kipp_out,
                 'n_runs': n_runs_actual
         })
-
-        # optional: save intermediate results
         df_res = pd.DataFrame(results)
         df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
 
-    # final save
     df_final = pd.DataFrame(results)
     df_final.to_csv(os.path.join(out_dir, "grid_results.csv"), index=False)
-    # Laufzeit berechnen (perf_counter für hohe Genauigkeit)
     elapsed = time.perf_counter() - start_time
-    # formatiere als hh:mm:ss
     hrs, rem = divmod(elapsed, 3600)
     mins, secs = divmod(rem, 60)
     elapsed_str = f"{int(hrs):02d}:{int(mins):02d}:{secs:05.2f}"
-
-    # Ausgabe in Konsole
     print(f"Grid sweep finished. Total jobs: {total_jobs}. Elapsed time: {elapsed_str}. Results saved to {out_dir}")
 
-    # optional: schreibe Run‑Metadaten in eine kleine Datei
     try:
         info_path = os.path.join(out_dir, "run_info.txt")
         with open(info_path, "w") as fh:
@@ -560,6 +562,7 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         pass
 
     return df_final
+
 
 # -------------------------
 # Visualization helpers
@@ -605,13 +608,13 @@ def example_run():
 
     size_values = [1000, 10000, 50000, 100000]
     quality_values = [0.2, 0.4, 0.6, 0.8]
-    proximity_values = [0.5, 2.0, 4.0]  # decay_scale
+    proximity_values = [0.5, 2.0, 4.0]
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=50, steps=50,
-                                 rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=2,
-                                 out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': True}, base_seed=42, n_workers=None)
+                                 n_runs=1, steps=50,
+                                 rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
+                                 out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
     # -------------------------
     # Wenn Kosten-Szenarien aktiv sind: nur 2 Heatmaps für die 4 Kostenvarianten
@@ -648,8 +651,8 @@ def example_run():
                 y_vals = list(pivot_df.index)
                 plt.xticks(ticks=np.arange(len(x_vals)), labels=[f"{int(x):,}" for x in x_vals], rotation=45)
                 plt.yticks(ticks=np.arange(len(y_vals)), labels=[f"{int(y):,}" for y in y_vals])
-                plt.xlabel("Investitionskosten (gesamt) [$]")
-                plt.ylabel("Betriebskosten pro Jahr (gesamt) [$/Jahr]")
+                plt.xlabel("Investment cost (total) [$]")
+                plt.ylabel("Annual operational cost (total) [$/Jahr]")
                 plt.title(title)
                 plt.tight_layout()
                 ensure_dir(os.path.dirname(fname) or ".")
@@ -661,8 +664,8 @@ def example_run():
             fname_m = os.path.join(out_dir, "heatmap_median_kipp_time_costs.png")
 
             # Speichern (p_kipp: 0..1, median_kipp_time: Jahre)
-            save_cost_heatmap(pivot_p, "p_kipp über Kostenvarianten", "p_kipp (Wahrscheinlichkeit)", fname_p, cmap='viridis')
-            save_cost_heatmap(pivot_m, "Median Kippzeit über Kostenvarianten", "Median Kippzeit (Jahre)", fname_m, cmap='magma')
+            save_cost_heatmap(pivot_p, "Kipp-Wahrscheinlichkeit über Kostenvarianten", "p_kipp (Wahrscheinlichkeit)", fname_p, cmap='viridis')
+            save_cost_heatmap(pivot_m, "Median Kipp-Zeit über Kostenvarianten", "Median Kipp-Zeit (Jahre)", fname_m, cmap='magma')
 
             print(f"[INFO] Kosten-Heatmaps gespeichert: {fname_p}, {fname_m}")
         else:
