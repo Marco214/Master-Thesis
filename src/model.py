@@ -1,8 +1,8 @@
 """
 Gentrification model extended with Urban Green Spaces (UGS)
 - Parks with attributes: proximity, size, quality, function
-- MCDA aggregation to compute cell.green_score (Caprioli-style)
-- Hedonic capitalization of green_score into rents (Bottero/Rigolon references)
+- MCDA aggregation to compute cell.green_score
+- Hedonic capitalization of green_score into rents
 - Heatmap export with park overlay and safe folder clearing
 """
 
@@ -20,9 +20,8 @@ import matplotlib.pyplot as plt
 
 from agent import Household
 
-# -------------------------
-# Parameter Defaults
-# -------------------------
+
+#Model Parameter Defaults
 DEFAULTS = {
     # grid parameter (values from Mauro)
     "width": 7,
@@ -53,36 +52,41 @@ DEFAULTS = {
     # Hedonic capitalization parameter (beta_ugs)
     "beta_ugs": 0.2,
     # park-cost parameter
-    "enable_park_costs": False,                      # Kostenberechnung an/aus
-    "apply_costs_to_rents": False,                   # ob jährliche Betriebskosten auf Mieter umgelegt werden
-    "cost_invest_per_m2": 60.0,                     # einmalige Investitionskosten pro m2 (z.B. $/m2)
-    "cost_operational_per_m2_per_year": 1.8,        # jährliche Betriebskosten pro m2 (z.B. $/m2/Jahr)
-    "quality_invest_multiplier": 0.5,               # zusätzlicher Investitionsfaktor pro Qualitätspunkt (0..1)
-    "quality_operational_multiplier": 0.3,          # zusätzlicher Betriebsfaktor pro Qualitätspunkt (0..1)
-    "cost_decay_scale": None,                       # optional: eigener Decay für Kostenverteilung (None -> wie compute_green_scores)
+    "enable_park_costs": True, # Cost Calculation On/Off
+    "apply_costs_to_rents": True, # whether annual operating costs are passed on to tenants
+    "cost_invest_per_m2": 60.0,
+    "cost_operational_per_m2_per_year": 1.8,
+    "quality_invest_multiplier": 0.5, # Additional investment factor per quality point (0..1)
+    "quality_operational_multiplier": 0.3, # Additional operating factor per quality point (0..1)
+    "cost_decay_scale": None, # Decay for cost distribution (None -> same as compute_green_scores)
 }
 
-# -------------------------
-# Helper functions
-# -------------------------
+#Helper functions
+#clamps the value x to the interval [a, b] and returns the bounded result
 def clamp(x, a=0.0, b=1.0):
     return max(a, min(b, x))
 
+#ensures the directory path exists; creates it (with exist_ok=True) if it does not
 def ensure_dir(path):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
+#filters df by percent_cumul range, normalizes the percent column to sum to 1,
+#and returns a randomly chosen row index using model.random.choices weighted by the normalized percent
 def pick_random_row(df, model, percent_cumul_limit_low = 0, percent_cumul_limit_high = 100):
     df1 = df[(df["percent_cumul"] >= percent_cumul_limit_low) & (df["percent_cumul"] <= percent_cumul_limit_high)]
     total_percent = df1["percent"].sum()
     df1.loc[:, "percent"] = df1["percent"] / total_percent
     return model.random.choices(df1.index, weights = df1["percent"])[0]
 
-# -------------------------
-# UGS (park) class
-# Park attributes: proximity, size, quality, function
-# -------------------------
+#UGS (park) class
 class UGS:
+    """
+    :param pos: park position
+    :param size_m2: park size
+    :param quality: park quality
+    :param function: park function
+    """
     def __init__(self, pos, size_m2, quality, function):
         self.pos = pos
         self.size = size_m2
@@ -94,15 +98,12 @@ class UGS:
     def compute_costs(self, cost_invest_per_m2, cost_operational_per_m2_per_year,
                       quality_invest_multiplier=0.0, quality_operational_multiplier=0.0):
         """
-        Berechne einmalige Investitionskosten und jährliche Betriebskosten.
-        Beide Komponenten hängen linear von Größe (m2) ab und werden durch Qualität skaliert.
+        Calculate one-time investment costs and annual operating costs based on quality and size
         """
         self.investment_cost = self.size * cost_invest_per_m2 * (1.0 + self.quality * quality_invest_multiplier)
         self.annual_operational_cost = self.size * cost_operational_per_m2_per_year * (1.0 + self.quality * quality_operational_multiplier)
 
-# -------------------------
 # Cell object stored in cell_map
-# -------------------------
 class Cell:
     def __init__(self, pos, base_rent, green_score=0.0):
         self.pos = pos
@@ -110,21 +111,18 @@ class Cell:
         self.green_score = green_score
         self.occupants = []
 
-    @property
     def occupancy(self):
         return len(self.occupants)
 
     def current_rent(self, demand_factor, demand_price_elasticity, beta_ugs):
         """
-        Rent formation: base_rent adjusted by demand and green capitalization (hedonic effect).
+        Rent formation: base_rent adjusted by demand and green capitalization (hedonic effect)
         """
         rent = self.base_rent * (1.0 + demand_factor * demand_price_elasticity)
         rent *= (1.0 + beta_ugs * self.green_score)
         return rent
 
-# -------------------------
 # Main Green-Gentrification Model
-# -------------------------
 class GreenGentModel(Model):
     def __init__(self, **kwargs):
         params = DEFAULTS.copy()
@@ -246,9 +244,7 @@ class GreenGentModel(Model):
         # collect initial state so datacollector is not empty
         self.datacollector.collect(self)
 
-    # -------------------------
-    # Methoden zur Kostenberechnung / Verteilung
-    # -------------------------
+    # Methods for Cost Calculation / Allocation
     def compute_total_investment(self):
         if not self.enable_park_costs:
             return 0.0
@@ -261,9 +257,9 @@ class GreenGentModel(Model):
 
     def allocate_operational_costs_to_cells(self, decay_scale=None):
         """
-        Berechne für jede Zelle den jährlichen Anteil an Park-Betriebskosten.
-        Verteilung erfolgt gewichtet nach proximity (exponentieller Decay).
-        Rückgabe: dict mapping cell.pos -> annual_cost_share (float)
+        Calculate the annual share of parking operating costs for each cell
+        Distribution is weighted by proximity (exponential decay)
+        Return: dict mapping cell.pos -> annual_cost_share (float)
         """
         if not self.enable_park_costs:
             return {pos: 0.0 for pos in self.cell_map.keys()}
@@ -272,12 +268,12 @@ class GreenGentModel(Model):
             decay_scale = self.cost_decay_scale if self.cost_decay_scale is not None else max(self.width,
                                                                                               self.height) / 4.0
 
-        # initialisiere Kostenanteile
+        # Initialize cost shares
         cell_costs = {pos: 0.0 for pos in self.cell_map.keys()}
 
-        # für jeden Park: berechne Proximity-Gewichte zu allen Zellen und verteile die park.annual_operational_cost
+        # For each park: Calculate proximity weights for all cells and distribute the park.annual_operational_cost
         for park in self.parks:
-            # sammle prox-Werte
+            # collect prox-Values
             prox_list = []
             cells = []
             for (x, y), cell in self.cell_map.items():
@@ -288,16 +284,14 @@ class GreenGentModel(Model):
             total_prox = sum(prox_list)
             if total_prox <= 0:
                 continue
-            # verteile die jährlichen Kosten proportional zu prox
+            # Allocate the annual costs in proportion to prox
             for (pos, prox) in zip(cells, prox_list):
                 share = (prox / total_prox) * park.annual_operational_cost
                 cell_costs[pos] += share
 
         return cell_costs
 
-    # -------------------------
     # MCDA + proximity: compute green_score per cell
-    # -------------------------
     def compute_green_scores(self, decay_scale=None):
         """
         For each cell compute an aggregated UGS influence score using:
@@ -305,7 +299,7 @@ class GreenGentModel(Model):
         - park size (normalized)
         - park quality (0..1)
         - park function match (simple categorical weight)
-        We use the maximum park influence per cell (closest/best park) as in Caprioli-style approach.
+        Use of the maximum park influence per cell (closest/best park)
         """
         if decay_scale is None:
             decay_scale = max(self.width, self.height) / 4.0
@@ -331,9 +325,7 @@ class GreenGentModel(Model):
                     best_score = score
             cell.green_score = clamp(best_score, 0.0, 1.0)
 
-    # -------------------------
     # Utility helpers
-    # -------------------------
     def count_group(self, group):
         return sum(1 for a in self.schedule.agents if a.income_group == group)
 
@@ -349,40 +341,30 @@ class GreenGentModel(Model):
 
     def local_high_income_share(self, radius=3):
         """
-        Durchschnittlicher High-Income-Anteil um alle Parks.
+        average high-income share across all parks
         """
         if len(self.parks) == 0:
             return 0.0
-
         shares = []
 
         for park in self.parks:
             px, py = park.pos
-
             high = 0
             total = 0
-
             for dx in range(-radius, radius + 1):
                 for dy in range(-radius, radius + 1):
-
                     x = px + dx
                     y = py + dy
-
                     if 0 <= x < self.width and 0 <= y < self.height:
-
                         cell = self.cell_map[(x, y)]
-
                         for a in cell.occupants:
                             total += 1
                             if a.income_group == "high":
                                 high += 1
-
             if total > 0:
                 shares.append(high / total)
-
         if len(shares) == 0:
             return 0.0
-
         return np.mean(shares)
 
     def sample_cells_around(self, pos, radius=5, k=30):
@@ -398,9 +380,7 @@ class GreenGentModel(Model):
             return candidates
         return random.sample(candidates, k)
 
-    # -------------------------
     # Heatmap export utilities (with park overlay)
-    # -------------------------
     def build_income_grid(self):
         grid = np.full((self.width, self.height), np.nan)
         for (x, y), cell in self.cell_map.items():
@@ -412,15 +392,11 @@ class GreenGentModel(Model):
         return grid
 
     def build_high_income_share_grid(self):
-        """
-        Gibt ein 2D-Array zurück, das pro Zelle den Anteil der High-Income-Haushalte enthält.
-        Wertebereich: 0.0 bis 1.0
-        """
         grid = np.zeros((self.width, self.height))
 
         for (x, y), cell in self.cell_map.items():
             if cell.occupancy == 0:
-                grid[x, y] = np.nan  # leere Zellen als NaN anzeigen
+                grid[x, y] = np.nan  # display empty cells as NaN
                 continue
 
             high = sum(1 for a in cell.occupants if a.income_group == "high")
@@ -465,7 +441,7 @@ class GreenGentModel(Model):
         cbar = plt.colorbar(mesh, ax=ax)
         cbar.set_label(label, fontsize=12)
 
-        # helper: formatiere Geldwerte kompakt
+        # helper: Format monetary values in a compact format
         def fmt_money(x):
             if x >= 1e6:
                 return f"${x / 1e6:.1f}M"
@@ -473,7 +449,7 @@ class GreenGentModel(Model):
                 return f"${x / 1e3:.0f}k"
             return f"${x:.0f}"
 
-        # overlay park centroids and size/quality/cost markers ON TOP of the mesh
+        # overlay park centroids and size/quality/cost markers on top of the mesh
         if overlay_parks and len(self.parks) > 0:
             for park in self.parks:
                 px, py = park.pos
@@ -491,10 +467,9 @@ class GreenGentModel(Model):
                 ax.scatter(cx, cy, c='lime', s=size_marker, edgecolors='k',
                            linewidths=0.5, marker='o', zorder=3)
 
-                # Basistext: quality und function (wie bisher)
                 lines = [f"q={park.quality:.2f}", f"f={park.function}"]
 
-                # falls Kosten aktiviert: Investitions- und Betriebskosten hinzufügen
+                # If costs are capitalized: Add investment and operating costs
                 if getattr(self, "enable_park_costs", False):
                     inv = getattr(park, "investment_cost", None)
                     op = getattr(park, "annual_operational_cost", None)
@@ -503,7 +478,6 @@ class GreenGentModel(Model):
                     if op is not None:
                         lines.append(f"Op/Y: {fmt_money(op)}")
 
-                # kombiniere in einer kompakten Textbox (max 3 Zeilen, kürze bei Bedarf)
                 text = "\n".join(lines)
                 ax.text(cx + 0.2, cy + 0.2, text,
                         color='white', fontsize=6, zorder=4,
@@ -546,40 +520,39 @@ class GreenGentModel(Model):
             overlay_parks=True
         )
 
-    # -------------------------
-    # Step: agents act, then rents update via demand feedback
-    # 1 step equals 1 year
-    # -------------------------
     def step(self):
+        """
+        agents act, then rents update via demand feedback
+        1 step equals 1 year
+        """
         self.schedule.step()
 
-        # aktualisiere Basisrenten (wie bisher)
+        # update basic rents
         for cell in self.cell_map.values():
             demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
             drift = 1.0 + 0.003 * math.log1p(demand_factor) + 0.002 * cell.green_score
             cell.base_rent *= drift
 
-        # falls Kosten aktiviert: aktualisiere Summen und (optional) verteile Betriebskosten auf Haushalte
+        # If costs are capitalized: Update totals and allocate operating costs to households
         if self.enable_park_costs:
             self.total_investment = self.compute_total_investment()
             self.total_annual_operational = self.compute_total_annual_operational()
 
             if self.apply_costs_to_rents:
-                # berechne jährliche Kostenanteile pro Zelle
+                # Calculate the annual cost shares per cell
                 cell_annual_costs = self.allocate_operational_costs_to_cells()
-                # wandle in monatliche Kosten pro Haushalt um und addiere als Zuschlag zur base_rent
+                # Convert to monthly costs per household and add as a surcharge to base_rent
                 for pos, cell in self.cell_map.items():
                     annual_cost = cell_annual_costs.get(pos, 0.0)
-                    # falls keine Haushalte: wir verteilen trotzdem auf die Zelle, aber pro-Haushalt wäre 0
                     if cell.occupancy > 0:
                         monthly_per_household = (annual_cost / max(1, cell.occupancy)) / 12.0
-                        # addiere den Zuschlag zur base_rent (alternativ könnte man einen separaten Steuer-/Abgabe-Faktor verwenden)
                         cell.base_rent += monthly_per_household
 
         # collect data
         self.datacollector.collect(self)
 
         # debug logging every N steps
+        '''
         if not hasattr(self, "_step_count"):
             self._step_count = 0
         self._step_count += 1
@@ -606,10 +579,8 @@ class GreenGentModel(Model):
 
             #print(f"[CELL RENT] Step {self._step_count}: base_rent min={min(base_rents):.2f} max={max(base_rents):.2f} "
                   #f"current_rent min={min(demand_rents):.2f} max={max(demand_rents):.2f}")
-
-    # -------------------------
+        '''
     # Run with heatmap export
-    # -------------------------
     def run_model(self, steps):
         for step in range(steps):
             self.step()

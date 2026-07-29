@@ -12,9 +12,7 @@ import matplotlib.pyplot as plt
 
 from model import GreenGentModel
 
-# -------------------------
-# Hilfsfunktionen
-# -------------------------
+# Helper functions
 def ensure_dir(path):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
@@ -32,8 +30,7 @@ def detect_tipping_local(model, baseline_rent,
                          income_shift_threshold=0.003,
                          persist_years=3):
     """
-    Kipppunktprüfung basierend auf lokalem Anteil High-Income-Haushalte
-    in der Nachbarschaft eines Parks.
+    Tipping-point analysis based on the local proportion of high-income households in a park's neighborhood
     """
     df = model.datacollector.get_model_vars_dataframe().reset_index(drop=True)
     if df.empty:
@@ -54,36 +51,32 @@ def detect_tipping_local(model, baseline_rent,
 
     baseline_rent_val = baseline_rent
 
-    # -------------------------
-    # Kipppunktprüfung
-    # -------------------------
+    # Tipping Point Analysis
     for t in range(1, len(df)):
         rent_t = df['avg_rent'].iloc[t]
 
-        # 1) Mietschwelle
+        # 1) Rent-treshold
         if rent_t >= baseline_rent_val * rent_rel_threshold:
 
             end_idx = min(len(df), t + int(persist_years))
-            # 2) Persistenz
+            # 2) Persistence
             if (df['avg_rent'].iloc[t:end_idx] >= baseline_rent_val * rent_rel_threshold).all():
 
-                # 3) Lokaler sozialer Wandel
+                # 3) local social change
                 high_change = share_high_local[t] - share_high_local[0] if len(share_high_local) > t else 0.0
                 if high_change >= income_shift_threshold:
                     return True, t
 
     return False, None
 
-# -------------------------
-# Single-run wrapper
-# -------------------------
 def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years, export=False):
     """
+    Single-run wrapper
     params: dict with keys that will be passed to GreenGentModel (e.g., park_size, park_quality, decay_scale, park_function)
     seed: int
     returns: dict with run result (kipp, kipp_time, df, investment_cost, annual_operational_cost)
     """
-    # deterministische Seeds für Reproduzierbarkeit
+    # Deterministic seeds for reproducibility
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -93,7 +86,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
     model_kwargs['seed'] = seed
     model = GreenGentModel(**model_kwargs)
 
-    # Park-Override falls gewünscht
+    # Park-Override
     if 'park_size' in params or 'park_quality' in params or 'park_pos' in params or 'decay_scale' in params or 'park_function' in params:
         try:
             from model import UGS as UGS_local
@@ -122,7 +115,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         new_park = ugs_cls((px, py), size, quality, function)
         model.parks.append(new_park)
 
-        # --- WICHTIG: Falls das Modell Kosten aktiviert hat, berechne Kosten für den neuen Park
+        # If the model has capitalized costs, calculate the costs for the new park
         if getattr(model, "enable_park_costs", False):
             invest_per_m2 = getattr(model, "cost_invest_per_m2", None)
             op_per_m2 = getattr(model, "cost_operational_per_m2_per_year", None)
@@ -132,13 +125,12 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
             if hasattr(new_park, "compute_costs") and invest_per_m2 is not None and op_per_m2 is not None:
                 new_park.compute_costs(invest_per_m2, op_per_m2, q_inv_mult, q_op_mult)
             else:
-                # Fallback: set Attribute manuell, falls compute_costs nicht vorhanden
                 new_park.investment_cost = new_park.size * (invest_per_m2 if invest_per_m2 is not None else 0.0) * (
                             1.0 + new_park.quality * q_inv_mult)
                 new_park.annual_operational_cost = new_park.size * (op_per_m2 if op_per_m2 is not None else 0.0) * (
                             1.0 + new_park.quality * q_op_mult)
 
-            # Aktualisiere aggregierte Summen im Model
+            # Update aggregated totals in the model
             if hasattr(model, "compute_investment_cost"):
                 model.investment_cost = model.compute_investment_cost()
             else:
@@ -154,7 +146,6 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         if hasattr(model, 'compute_green_scores'):
             model.compute_green_scores(decay_scale=decay)
 
-        # sichere Entfernung aus alten Zellen
         for a in list(model.schedule.agents):
             old_pos = getattr(a, 'pos', None)
             if old_pos is None:
@@ -163,7 +154,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
             if a in occupants:
                 safe_remove_from_list(occupants, a)
 
-        # neue zufällige Positionen
+        # new random positions
         all_positions = list(model.cell_map.keys())
         for a in list(model.schedule.agents):
             pos = random.choice(all_positions)
@@ -179,7 +170,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
     # collect time series
     df = model.datacollector.get_model_vars_dataframe().reset_index(drop=True)
 
-    # --- Gesamtkosten aus dem Modell lesen (falls vorhanden) ---
+    # Read the total cost from the model (if available)
     investment_cost = getattr(model, "investment_cost", None)
     annual_operational_cost = getattr(model, "annual_operational_cost", None)
 
@@ -199,7 +190,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         persist_years=persist_years
     )
 
-    # berechne Mietschwelle und Mietwert zum Kippzeitpunkt (falls vorhanden)
+    # Calculate the rent threshold and rental value at the tipping point (if applicable)
     rent_threshold = None
     rent_at_kipp = None
     try:
@@ -229,12 +220,9 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         'annual_operational_cost': annual_operational_cost
     }
 
-
-# -------------------------
-# Worker wrapper für multiprocessing (muss top-level sein)
-# -------------------------
 def _worker_task(task):
     """
+    Worker wrapper for multiprocessing (must be top-level)
     task: tuple containing (size, quality, proximity, park_function, run_idx, seed, model_base_kwargs, steps, rent_rel_threshold, income_shift_threshold, persist_years, out_dir)
     returns: dict with keys describing the run and result
     """
@@ -284,7 +272,7 @@ def _worker_task(task):
         }
 
     except Exception as e:
-        # Falls ein Fehler auftritt, gib eine robuste Struktur zurück (ohne Zugriff auf res)
+        # If an error occurs, return a robust structure
         return {
             'park_size': size,
             'park_quality': quality,
@@ -299,17 +287,14 @@ def _worker_task(task):
             'annual_operational_cost': None
         }
 
-
-# -------------------------
-# Grid sweep orchestrator mit multiprocessing
-# -------------------------
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
                        n_runs=1, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
                        use_multiprocessing=False):
     """
-    Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially.
+    Grid sweep orchestrator with multiprocessing
+    Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially
     """
     ensure_dir(out_dir)
     results = []
@@ -370,7 +355,7 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     completed_counts = {}
     printed_combos = set()
 
-    # --- Sequenzieller Modus ---
+    # Sequential Mode
     if not use_multiprocessing:
         for i, task in enumerate(tasks):
             res = _worker_task(task)
@@ -393,7 +378,6 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                 printed_combos.add(key)
 
             if (i + 1) % save_every == 0 or (i + 1) == total_jobs:
-                # gleiche Aggregations- und Speicherroutine wie im Original
                 df_partial = pd.DataFrame(raw_results)
                 grouped = df_partial.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
                 partial_rows = []
@@ -434,7 +418,7 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
                 df_partial_out.to_csv(tmp_path, index=False)
                 os.replace(tmp_path, os.path.join(out_dir, "grid_results_partial.csv"))
 
-    # --- Multiprocessing Modus (originale Logik) ---
+    # Multiprocessing Mode
     else:
         ctx = multiprocessing.get_context('spawn')
         pool = ctx.Pool(processes=n_workers)
@@ -500,7 +484,7 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
             pool.close()
             pool.join()
 
-    # --- gemeinsame Abschlussaggregation wie zuvor ---
+    # Final aggregation
     df_runs = pd.DataFrame(raw_results)
     if 'error' in df_runs.columns:
         err_df = df_runs[df_runs['error'].notnull()]
@@ -598,7 +582,7 @@ def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=Fal
     plt.close()
 
 # -------------------------
-# Example runner (CLI style)
+# Example runner
 # -------------------------
 def example_run():
     out_dir = "../output/experiments"
@@ -616,14 +600,12 @@ def example_run():
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
-    # -------------------------
-    # Wenn Kosten-Szenarien aktiv sind: nur 2 Heatmaps für die 4 Kostenvarianten
-    # -------------------------
+    # If cost scenarios are active: only 2 heatmaps for the 4 cost variants
     if 'investment_cost' in df_grid.columns and 'annual_operational_cost' in df_grid.columns:
         df_costs = df_grid.dropna(subset=['investment_cost', 'annual_operational_cost']).copy()
 
         if not df_costs.empty:
-            # Runde Kosten auf ganze Zahlen (falls nicht bereits gerundet)
+            # Round costs to whole numbers (if not already rounded)
             df_costs['investment_cost'] = df_costs['investment_cost'].astype(float).round().astype(int)
             df_costs['annual_operational_cost'] = df_costs['annual_operational_cost'].astype(float).round().astype(int)
 
@@ -633,11 +615,11 @@ def example_run():
                 median_kipp_time_med = ('median_kipp_time', lambda s: np.nanmedian(s.dropna().astype(float)))
             ).reset_index()
 
-            # Pivot für Heatmaps: Investition (x) vs Betrieb (y)
+            # Pivot for Heatmaps: Investment (x) vs. Operations (y)
             pivot_p = agg.pivot_table(index='annual_operational_cost', columns='investment_cost', values='p_kipp_mean', aggfunc='mean')
             pivot_m = agg.pivot_table(index='annual_operational_cost', columns='investment_cost', values='median_kipp_time_med', aggfunc='mean')
 
-            # Sortiere Achsen (aufsteigend)
+            # Sort Axes (ascending)
             pivot_p = pivot_p.reindex(index=sorted(pivot_p.index), columns=sorted(pivot_p.columns))
             pivot_m = pivot_m.reindex(index=sorted(pivot_m.index), columns=sorted(pivot_m.columns))
 
@@ -659,11 +641,9 @@ def example_run():
                 plt.savefig(fname, dpi=150)
                 plt.close()
 
-            # Dateinamen
             fname_p = os.path.join(out_dir, "heatmap_p_kipp_costs.png")
             fname_m = os.path.join(out_dir, "heatmap_median_kipp_time_costs.png")
 
-            # Speichern (p_kipp: 0..1, median_kipp_time: Jahre)
             save_cost_heatmap(pivot_p, "Kipp-Wahrscheinlichkeit über Kostenvarianten", "p_kipp (Wahrscheinlichkeit)", fname_p, cmap='viridis')
             save_cost_heatmap(pivot_m, "Median Kipp-Zeit über Kostenvarianten", "Median Kipp-Zeit (Jahre)", fname_m, cmap='magma')
 
@@ -671,11 +651,10 @@ def example_run():
         else:
             print("[WARN] Keine Runs mit investment_cost/annual_operational_cost gefunden; keine Kosten-Heatmaps erstellt.")
     else:
-        # Fallback: falls keine Kosten-Spalten vorhanden sind, behalte das alte Verhalten
+        # Fallback: If there are no cost columns, retain the old behavior
         print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
-        # Optional: hier könntest du die alte Schleife wieder aktivieren, falls gewünscht.
 
-    # Gesamtlaufzeit für example_run
+    # Total runtime for example_run
     run_elapsed = time.perf_counter() - run_start
     hrs, rem = divmod(run_elapsed, 3600)
     mins, secs = divmod(rem, 60)

@@ -1,6 +1,6 @@
-# -------------------------
+"""
 # Example run and plotting
-# -------------------------
+"""
 import glob
 import os
 import numpy as np
@@ -24,9 +24,7 @@ def clear_out_dir(out_dir, pattern="*.png"):
         except Exception as e:
             print(f"Warnung: Datei {f} konnte nicht gelöscht werden: {e}")
 
-# -------------------------
 # Example run and plots
-# -------------------------
 def run_example(steps, seed):
     out_dir = "../output/heatmaps"
     ensure_dir(out_dir)
@@ -90,4 +88,4 @@ def run_example(steps, seed):
     #plt.show()
 
 if __name__ == "__main__":
-    run_example(steps=50, seed=123)
+    run_example(steps=10, seed=122)
