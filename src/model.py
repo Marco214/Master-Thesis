@@ -20,7 +20,6 @@ import matplotlib.pyplot as plt
 
 from agent import Household
 
-
 #Model Parameter Defaults
 DEFAULTS = {
     # grid parameter (values from Mauro)

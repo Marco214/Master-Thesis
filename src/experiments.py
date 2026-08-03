@@ -1,5 +1,5 @@
 """
-Grid-sweep Experimente für Kipppunktanalyse der Gentrifizierung von urbanen Grünflächen
+Grid-sweep experiments for tipping-point analysis of the gentrification of urban green spaces
 """
 
 import os
