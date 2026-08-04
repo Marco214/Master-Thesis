@@ -9,7 +9,6 @@ import multiprocessing
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.stats import t
 
 from model import GreenGentModel
 
@@ -69,82 +68,6 @@ def detect_tipping_local(model, baseline_rent,
                     return True, t
 
     return False, None
-
-def write_run_statistics(all_median_kipp_times, output_file="run_info.txt"):
-    """
-    Writes overall statistics of the median tipping times over all parameter
-    combinations to run_info.txt.
-
-    Parameters
-    ----------
-    all_median_kipp_times : list[float]
-        One median tipping time for each parameter combination
-        (e.g. 144 values).
-
-    output_file : str
-        Path to run_info.txt
-    """
-
-    values = np.array(all_median_kipp_times, dtype=float)
-
-    # remove invalid values (optional)
-    values = values[~np.isnan(values)]
-
-    n = len(values)
-
-    if n == 0:
-        print("No valid tipping times available.")
-        return
-
-    # Descriptive statistics
-    mean = np.mean(values)
-    median = np.median(values)
-    std = np.std(values, ddof=1)
-    minimum = np.min(values)
-    maximum = np.max(values)
-    q25 = np.percentile(values, 25)
-    q75 = np.percentile(values, 75)
-    iqr = q75 - q25
-
-    # 95 % Confidence Interval
-    ci_low, ci_high = t.interval(
-        confidence=0.95,
-        df=n - 1,
-        loc=mean,
-        scale=std / np.sqrt(n)
-    )
-
-    # Write to file
-    with open(output_file, "a") as f:
-
-        f.write("\n")
-        f.write("=" * 60 + "\n")
-        f.write("OVERALL TIPPING TIME STATISTICS\n")
-        f.write("=" * 60 + "\n")
-
-        f.write(f"Number of parameter combinations : {n}\n")
-        f.write("\n")
-
-        f.write(f"Mean                           : {mean:.3f}\n")
-        f.write(f"Median                         : {median:.3f}\n")
-        f.write(f"Standard deviation             : {std:.3f}\n")
-        f.write("\n")
-
-        f.write(f"Minimum                        : {minimum:.3f}\n")
-        f.write(f"25 % Quantile                  : {q25:.3f}\n")
-        f.write(f"75 % Quantile                  : {q75:.3f}\n")
-        f.write(f"Maximum                        : {maximum:.3f}\n")
-        f.write(f"Interquartile Range (IQR)      : {iqr:.3f}\n")
-        f.write("\n")
-
-        f.write(
-            f"95 % Confidence Interval       : "
-            f"[{ci_low:.3f}, {ci_high:.3f}]\n"
-        )
-
-        f.write("=" * 60 + "\n")
-
-    print(f"Statistics written to {output_file}")
 
 def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years, export=False):
     """
@@ -363,7 +286,7 @@ def _worker_task(task):
         }
 
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=3, steps=50,
+                       n_runs=5, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
                        use_multiprocessing=True):
@@ -602,26 +525,8 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         df_res = pd.DataFrame(results)
         df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
 
-    # Final aggregation
-    # compute overall statistics after all parameter combinations
     df_final = pd.DataFrame(results)
     df_final.to_csv(os.path.join(out_dir, "grid_results.csv"), index=False)
-
-    # Collect median_kipp_time values (one per parameter combination)
-    # keep NaN values — write_run_statistics will filter them out
-    all_median_kipp_times = [r.get('median_kipp_time') for r in results]
-
-    # Ensure output path for run_info
-    info_path = os.path.join(out_dir, "run_info.txt")
-
-    # Write the detailed statistics (appends to run_info.txt)
-    try:
-        write_run_statistics(all_median_kipp_times, output_file=info_path)
-    except Exception as e:
-        # If statistics writing fails, still continue to write basic info and finish gracefully
-        print(f"Warning: could not write overall statistics: {e}")
-
-    # Existing elapsed time reporting and basic run_info
     elapsed = time.perf_counter() - start_time
     hrs, rem = divmod(elapsed, 3600)
     mins, secs = divmod(rem, 60)
@@ -629,7 +534,8 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
     print(f"Grid sweep finished. Total jobs: {total_jobs}. Elapsed time: {elapsed_str}. Results saved to {out_dir}")
 
     try:
-        with open(info_path, "a") as fh:
+        info_path = os.path.join(out_dir, "run_info.txt")
+        with open(info_path, "w") as fh:
             fh.write(f"finished_at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             fh.write(f"total_jobs: {total_jobs}\n")
             fh.write(f"elapsed_seconds: {elapsed:.4f}\n")
@@ -639,7 +545,10 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
 
     return df_final
 
+
+# -------------------------
 # Visualization helpers
+# -------------------------
 def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=False, y_log=False, cmap='viridis'):
     """
     df_grid: DataFrame with columns x_col, y_col, value_col
@@ -685,7 +594,7 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=3, steps=50,
+                                 n_runs=5, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
