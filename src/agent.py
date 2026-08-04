@@ -24,7 +24,7 @@ class Household(Agent):
         4) social homophily (fraction of same-income neighbors)
         """
         #1. Rent burden
-        demand_factor = cell.occupancy / max(1, (self.model.width * self.model.height) / 100.0)
+        demand_factor = cell.occupancy() / max(1, (self.model.width * self.model.height) / 100.0)
         rent = cell.current_rent(demand_factor, self.model.demand_price_elasticity, self.model.beta_ugs)
 
         rent_burden = rent / (self.income_value *

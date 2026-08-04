@@ -41,7 +41,7 @@ DEFAULTS = {
     "utility_threshold": 20,
     "seed": None,
     # heatmap export params
-    "export_every": 5,
+    "export_every": 10,
     "out_dir": "../output/heatmaps",
     # MCDA weights for UGS attributes (from literature)
     "w_proximity": 0.40,
@@ -51,8 +51,8 @@ DEFAULTS = {
     # Hedonic capitalization parameter (beta_ugs)
     "beta_ugs": 0.2,
     # park-cost parameter
-    "enable_park_costs": True, # Cost Calculation On/Off
-    "apply_costs_to_rents": True, # whether annual operating costs are passed on to tenants
+    "enable_park_costs": False, # Cost Calculation On/Off
+    "apply_costs_to_rents": False, # whether annual operating costs are passed on to tenants
     "cost_invest_per_m2": 60.0,
     "cost_operational_per_m2_per_year": 1.8,
     "quality_invest_multiplier": 0.5, # Additional investment factor per quality point (0..1)
@@ -331,7 +331,7 @@ class GreenGentModel(Model):
     def average_rent(self):
         rents = []
         for cell in self.cell_map.values():
-            demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
+            demand_factor = cell.occupancy() / max(1, (self.width * self.height) / 100.0)
             rents.append(cell.current_rent(demand_factor, self.demand_price_elasticity, self.beta_ugs))
         return float(np.mean(rents))
 
@@ -383,7 +383,7 @@ class GreenGentModel(Model):
     def build_income_grid(self):
         grid = np.full((self.width, self.height), np.nan)
         for (x, y), cell in self.cell_map.items():
-            if cell.occupancy > 0:
+            if cell.occupancy() > 0:
                 incomes = [a.income_value for a in cell.occupants]
                 grid[x, y] = np.mean(incomes)
             else:
@@ -394,12 +394,12 @@ class GreenGentModel(Model):
         grid = np.zeros((self.width, self.height))
 
         for (x, y), cell in self.cell_map.items():
-            if cell.occupancy == 0:
+            if cell.occupancy() == 0:
                 grid[x, y] = np.nan  # display empty cells as NaN
                 continue
 
             high = sum(1 for a in cell.occupants if a.income_group == "high")
-            total = cell.occupancy
+            total = cell.occupancy()
 
             grid[x, y] = high / total
 
@@ -408,7 +408,7 @@ class GreenGentModel(Model):
     def build_rent_grid(self):
         grid = np.zeros((self.width, self.height))
         for (x, y), cell in self.cell_map.items():
-            demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
+            demand_factor = cell.occupancy() / max(1, (self.width * self.height) / 100.0)
             grid[x, y] = cell.current_rent(demand_factor, self.demand_price_elasticity, self.beta_ugs)
         return grid
 
@@ -528,7 +528,7 @@ class GreenGentModel(Model):
 
         # update basic rents
         for cell in self.cell_map.values():
-            demand_factor = cell.occupancy / max(1, (self.width * self.height) / 100.0)
+            demand_factor = cell.occupancy() / max(1, (self.width * self.height) / 100.0)
             drift = 1.0 + 0.003 * math.log1p(demand_factor) + 0.002 * cell.green_score
             cell.base_rent *= drift
 
@@ -543,8 +543,8 @@ class GreenGentModel(Model):
                 # Convert to monthly costs per household and add as a surcharge to base_rent
                 for pos, cell in self.cell_map.items():
                     annual_cost = cell_annual_costs.get(pos, 0.0)
-                    if cell.occupancy > 0:
-                        monthly_per_household = (annual_cost / max(1, cell.occupancy)) / 12.0
+                    if cell.occupancy() > 0:
+                        monthly_per_household = (annual_cost / max(1, cell.occupancy())) / 12.0
                         cell.base_rent += monthly_per_household
 
         # collect data
@@ -558,7 +558,7 @@ class GreenGentModel(Model):
         if self._step_count % DEFAULTS["export_every"] == 0 or self._step_count == 1:
             base_rents = [c.base_rent for c in self.cell_map.values()]
             demand_rents = [
-                c.current_rent(c.occupancy / max(1, (self.width * self.height) / 100.0),
+                c.current_rent(c.occupancy() / max(1, (self.width * self.height) / 100.0),
                                self.demand_price_elasticity,
                                self.beta_ugs)
                 for c in self.cell_map.values()
@@ -583,5 +583,5 @@ class GreenGentModel(Model):
     def run_model(self, steps):
         for step in range(steps):
             self.step()
-            #if (step % self.export_every) == 0:
-                #self.export_heatmaps(step)
+            if (step % self.export_every) == 0:
+                self.export_heatmaps(step)
