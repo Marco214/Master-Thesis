@@ -85,7 +85,7 @@ def run_example(steps, seed):
     plt.legend()
     plt.tight_layout()
 
-    #plt.show()
+    plt.show()
 
 if __name__ == "__main__":
     run_example(steps=50, seed=122)

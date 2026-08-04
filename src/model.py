@@ -583,5 +583,5 @@ class GreenGentModel(Model):
     def run_model(self, steps):
         for step in range(steps):
             self.step()
-            if (step % self.export_every) == 0:
-                self.export_heatmaps(step)
+            #if (step % self.export_every) == 0:
+            #    self.export_heatmaps(step)

@@ -241,11 +241,9 @@ def _worker_task(task):
         res = run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years,
                                     export=False)
 
-        # Lese die vom Modell berechneten Summen (können None sein)
         total_inv = res.get('investment_cost', None)
         total_op = res.get('annual_operational_cost', None)
 
-        # Runde auf ganze Zahlen, falls Werte vorhanden
         try:
             total_inv_out = int(round(float(total_inv))) if total_inv is not None else None
         except Exception:
@@ -288,10 +286,10 @@ def _worker_task(task):
         }
 
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=1, steps=50,
+                       n_runs=5, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
-                       use_multiprocessing=False):
+                       use_multiprocessing=True):
     """
     Grid sweep orchestrator with multiprocessing
     Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially
@@ -596,7 +594,7 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=1, steps=50,
+                                 n_runs=5, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
