@@ -70,62 +70,115 @@ def detect_tipping_local(model, baseline_rent,
 
     return False, None
 
-def write_run_statistics(all_median_kipp_times, output_file="run_info.txt"):
+def write_run_statistics(all_median_kipp_times, all_p_kipp_values=None, output_file="run_info.txt"):
     """
-    Writes overall statistics of the median tipping times over all parameter
-    combinations to run_info.txt.
+    Writes overall statistics of the median tipping times and optionally p_kipp
+    over all parameter combinations to run_info.txt.
+
+    Parameters
+    ----------
+    all_median_kipp_times : list[float]
+        One median tipping time for each parameter combination (NaN allowed).
+
+    all_p_kipp_values : list[float] or None
+        One p_kipp value for each parameter combination (NaN allowed). If None,
+        p_kipp statistics are not written.
+
+    output_file : str
+        Path to run_info.txt
     """
+    # --- median_kipp_time statistics ---
     values = np.array(all_median_kipp_times, dtype=float)
-
-    # remove invalid values
     values = values[~np.isnan(values)]
-
     n = len(values)
 
-    if n == 0:
-        print("No valid tipping times available.")
-        return
-
-    # Descriptive statistics
-    mean = float(np.mean(values))
-    median = float(np.median(values))
-    std = float(np.std(values, ddof=1)) if n > 1 else 0.0
-    minimum = float(np.min(values))
-    maximum = float(np.max(values))
-    q25 = float(np.percentile(values, 25))
-    q75 = float(np.percentile(values, 75))
-    iqr = q75 - q25
-
-    # 95 % Confidence Interval (robust for small n)
-    if n > 1 and std > 0.0:
-        ci_low, ci_high = t.interval(
-            confidence=0.95,
-            df=n - 1,
-            loc=mean,
-            scale=std / np.sqrt(n)
-        )
-    else:
-        ci_low, ci_high = mean, mean
-
-    # Write to file (append)
     with open(output_file, "a") as f:
         f.write("\n")
         f.write("=" * 60 + "\n")
-        f.write("OVERALL TIPPING TIME STATISTICS\n")
-        f.write("=" * 60 + "\n")
-        f.write(f"Number of parameter combinations with tipping points: {n}\n\n")
-        f.write(f"Mean                           : {mean:.3f}\n")
-        f.write(f"Median                         : {median:.3f}\n")
-        f.write(f"Standard deviation             : {std:.3f}\n\n")
-        f.write(f"Minimum                        : {minimum:.3f}\n")
-        f.write(f"25 % Quantile                  : {q25:.3f}\n")
-        f.write(f"75 % Quantile                  : {q75:.3f}\n")
-        f.write(f"Maximum                        : {maximum:.3f}\n")
-        f.write(f"Interquartile Range (IQR)      : {iqr:.3f}\n\n")
-        f.write(f"95 % Confidence Interval       : [{ci_low:.3f}, {ci_high:.3f}]\n")
+        f.write("OVERALL MEDIAN KIPP TIME STATISTICS\n")
         f.write("=" * 60 + "\n")
 
-    print(f"Statistics written to {output_file}")
+        if n == 0:
+            f.write("No valid median_kipp_time values available.\n")
+        else:
+            mean = float(np.mean(values))
+            median = float(np.median(values))
+            std = float(np.std(values, ddof=1)) if n > 1 else 0.0
+            minimum = float(np.min(values))
+            maximum = float(np.max(values))
+            q25 = float(np.percentile(values, 25))
+            q75 = float(np.percentile(values, 75))
+            iqr = q75 - q25
+
+            if n > 1 and std > 0.0:
+                try:
+                    ci_low, ci_high = t.interval(confidence=0.95, df=n - 1, loc=mean, scale=std / np.sqrt(n))
+                except Exception:
+                    ci_low, ci_high = mean, mean
+            else:
+                ci_low, ci_high = mean, mean
+
+            f.write(f"Number of parameter combinations : {n}\n\n")
+            f.write(f"Mean                           : {mean:.3f}\n")
+            f.write(f"Median                         : {median:.3f}\n")
+            f.write(f"Standard deviation             : {std:.3f}\n\n")
+            f.write(f"Minimum                        : {minimum:.3f}\n")
+            f.write(f"25 % Quantile                  : {q25:.3f}\n")
+            f.write(f"75 % Quantile                  : {q75:.3f}\n")
+            f.write(f"Maximum                        : {maximum:.3f}\n")
+            f.write(f"Interquartile Range (IQR)      : {iqr:.3f}\n\n")
+            f.write(f"95 % Confidence Interval       : [{ci_low:.3f}, {ci_high:.3f}]\n")
+
+    print(f"Median kipp time statistics written to {output_file}")
+
+    # --- p_kipp statistics (optional) ---
+    if all_p_kipp_values is None:
+        return
+
+    p_vals = np.array(all_p_kipp_values, dtype=float)
+    p_vals = p_vals[~np.isnan(p_vals)]
+    n_p = len(p_vals)
+
+    with open(output_file, "a") as f:
+        f.write("\n")
+        f.write("=" * 60 + "\n")
+        f.write("OVERALL P_KIPP STATISTICS\n")
+        f.write("=" * 60 + "\n")
+
+        if n_p == 0:
+            f.write("No valid p_kipp values available.\n")
+        else:
+            p_mean = float(np.mean(p_vals))
+            p_median = float(np.median(p_vals))
+            p_std = float(np.std(p_vals, ddof=1)) if n_p > 1 else 0.0
+            p_min = float(np.min(p_vals))
+            p_max = float(np.max(p_vals))
+            p_q25 = float(np.percentile(p_vals, 25))
+            p_q75 = float(np.percentile(p_vals, 75))
+            p_iqr = p_q75 - p_q25
+
+            if n_p > 1 and p_std > 0.0:
+                try:
+                    p_ci_low, p_ci_high = t.interval(confidence=0.95, df=n_p - 1, loc=p_mean, scale=p_std / np.sqrt(n_p))
+                except Exception:
+                    p_ci_low, p_ci_high = p_mean, p_mean
+            else:
+                p_ci_low, p_ci_high = p_mean, p_mean
+
+            f.write(f"Mean                           : {p_mean:.3f}\n")
+            f.write(f"Median                         : {p_median:.3f}\n")
+            f.write(f"Standard deviation             : {p_std:.3f}\n\n")
+            f.write(f"Minimum                        : {p_min:.3f}\n")
+            f.write(f"25 % Quantile                  : {p_q25:.3f}\n")
+            f.write(f"75 % Quantile                  : {p_q75:.3f}\n")
+            f.write(f"Maximum                        : {p_max:.3f}\n")
+            f.write(f"Interquartile Range (IQR)      : {p_iqr:.3f}\n\n")
+            f.write(f"95 % Confidence Interval       : [{p_ci_low:.3f}, {p_ci_high:.3f}]\n")
+
+        f.write("=" * 60 + "\n")
+
+    print(f"p_kipp statistics written to {output_file}")
+
 
 def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years, export=False):
     """
@@ -344,7 +397,7 @@ def _worker_task(task):
         }
 
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=3, steps=50,
+                       n_runs=75, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
                        use_multiprocessing=True):
@@ -583,19 +636,27 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         df_res = pd.DataFrame(results)
         df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
 
-    # Final aggregation
+    # Final aggregation (nachdem results vollständig aufgebaut wurde)
     df_final = pd.DataFrame(results)
     df_final.to_csv(os.path.join(out_dir, "grid_results.csv"), index=False)
 
     # Collect median_kipp_time values (one per parameter combination)
     all_median_kipp_times = [r.get('median_kipp_time') for r in results]
 
-    # Ensure output path for run_info
-    info_path = os.path.join(out_dir, "run_info.txt")
+    # Collect p_kipp values (one per parameter combination)
+    all_p_kipp_values = [r.get('p_kipp') for r in results]
 
-    # Write the detailed statistics (appends to run_info.txt)
+    # Ensure output path for run_info and overwrite any previous file
+    info_path = os.path.join(out_dir, "run_info.txt")
     try:
-        write_run_statistics(all_median_kipp_times, output_file=info_path)
+        with open(info_path, "w") as fh:
+            fh.write(f"Run info for grid sweep started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except Exception as e:
+        print(f"Warning: could not initialize run_info file: {e}")
+
+    # Write both statistics with the unified function
+    try:
+        write_run_statistics(all_median_kipp_times, all_p_kipp_values, output_file=info_path)
     except Exception as e:
         print(f"Warning: could not write overall statistics: {e}")
 
@@ -661,7 +722,7 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=3, steps=50,
+                                 n_runs=75, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
