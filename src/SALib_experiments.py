@@ -16,13 +16,13 @@ problem = {
 }
 
 # Basis-N (Sobol)
-N = 512
+N = 1024
 param_values = sample(problem, N)
 
 # -------------------------
 # Evaluate-Funktion (modell-spezifisch)
 # -------------------------
-def evaluate(X, steps=30, seed=None):
+def evaluate(X, steps=50, seed=None):
     """
     X: [size, quality, proximity, function_code]
     Liefert als Skalar die gewählte Zielgröße (hier: durchschnittliche Miete).
@@ -127,7 +127,7 @@ def plot_sobol_indices(Si, problem, figsize=(8,5), title="Sobol Sensitivity Indi
 # -------------------------
 if __name__ == "__main__":
     base_seed = 42
-    steps = 30
+    steps = 50
 
     tasks = [(i, param_values[i], base_seed, steps) for i in range(len(param_values))]
 
