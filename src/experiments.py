@@ -397,7 +397,7 @@ def _worker_task(task):
         }
 
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=1, steps=30,
+                       n_runs=10, steps=50,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
                        use_multiprocessing=True):
@@ -757,7 +757,7 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=1, steps=30,
+                                 n_runs=10, steps=50,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
@@ -810,43 +810,79 @@ def example_run():
 
             print(f"[INFO] Kosten-Heatmaps gespeichert: {fname_p}, {fname_m}")
         else:
-            # Fallback: If there are no cost columns, retain the old behavior
-            # plot 2D slices: p_kipp and median_kipp_time over size x quality for each proximity and function
+            # Standard heatmaps (when no cost scenarios are available)
             for prox in proximity_values:
                 for func in function_values:
-                    df_slice = df_grid[(df_grid['decay_scale'] == prox) & (df_grid['park_function'] == func)]
+
+                    # use the correct column names
+                    df_slice = df_grid[
+                        (df_grid["proximity"] == prox) &
+                        (df_grid["function"] == func)
+                        ].copy()
+
                     if df_slice.empty:
+                        print(f"[INFO] No data for proximity={prox}, function={func}.")
                         continue
 
-                    # gemeinsame Vorverarbeitung
-                    df_slice = df_slice.copy()
-                    # p_kipp sollte numerisch vorliegen; median_kipp_time: None -> NaN
-                    df_slice['median_kipp_time'] = df_slice['median_kipp_time'].apply(
-                        lambda x: np.nan if x is None else x)
+                    # ensure numeric values
+                    df_slice["median_kipp_time"] = pd.to_numeric(
+                        df_slice["median_kipp_time"],
+                        errors="coerce"
+                    )
 
-                    # 1) Heatmap p_kipp
-                    out_file_p = os.path.join(out_dir, f"heatmap_p_kipp_prox_{prox}_func_{func}.png")
-                    plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality', value_col='p_kipp',
-                                           out_file=out_file_p, x_log=False, y_log=False, cmap='viridis')
-                    print(f"[HEATMAP] p_kipp heatmap saved: {out_file_p}")
+                    df_slice["p_kipp"] = pd.to_numeric(
+                        df_slice["p_kipp"],
+                        errors="coerce"
+                    )
 
-                    # 2) Heatmap median_kipp_time
-                    # Prüfen, ob es überhaupt median-Werte gibt
-                    if df_slice['median_kipp_time'].dropna().empty:
-                        print(f"[INFO] Keine median_kipp_time Werte für prox={prox}, func={func}; übersprungen.")
+                    # -------------------------------------------------
+                    # p_kipp heatmap
+                    # -------------------------------------------------
+                    if not df_slice["p_kipp"].dropna().empty:
+                        out_file_p = os.path.join(
+                            out_dir,
+                            f"heatmap_p_kipp_prox_{prox}_func_{func}.png"
+                        )
+
+                        plot_heatmap_from_grid(
+                            df_slice,
+                            x_col="size",
+                            y_col="quality",
+                            value_col="p_kipp",
+                            out_file=out_file_p,
+                            x_log=False,
+                            y_log=False,
+                            cmap="viridis"
+                        )
+
+                        print(f"[HEATMAP] Saved: {out_file_p}")
+
+                    # -------------------------------------------------
+                    # median tipping time heatmap
+                    # -------------------------------------------------
+                    if df_slice["median_kipp_time"].dropna().empty:
+                        print(f"[INFO] No median_kipp_time values for proximity={prox}, function={func}.")
                         continue
 
-                    # Optional: automatische vmin/vmax anhand Quantile für bessere Kontraste
-                    vmin = float(df_slice['median_kipp_time'].dropna().quantile(0.05))
-                    vmax = float(df_slice['median_kipp_time'].dropna().quantile(0.95))
+                    out_file_median = os.path.join(
+                        out_dir,
+                        f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png"
+                    )
 
-                    out_file_median = os.path.join(out_dir, f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png")
-                    # plot_heatmap_from_grid akzeptiert derzeit kein vmin/vmax-Argument;
-                    # falls du vmin/vmax nutzen willst, erweitere plot_heatmap_from_grid oder setze sie global.
-                    plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality',
-                                           value_col='median_kipp_time', out_file=out_file_median,
-                                           x_log=False, y_log=False, cmap='magma')
-            print("[WARN] Keine Runs mit investment_cost/annual_operational_cost gefunden; keine Kosten-Heatmaps erstellt.")
+                    plot_heatmap_from_grid(
+                        df_slice,
+                        x_col="size",
+                        y_col="quality",
+                        value_col="median_kipp_time",
+                        out_file=out_file_median,
+                        x_log=False,
+                        y_log=False,
+                        cmap="magma"
+                    )
+
+                    print(f"[HEATMAP] Saved: {out_file_median}")
+
+            print("[INFO] Standard heatmaps created.")
     else:
         print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
 
