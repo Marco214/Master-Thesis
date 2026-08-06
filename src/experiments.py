@@ -397,7 +397,7 @@ def _worker_task(task):
         }
 
 def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=75, steps=50,
+                       n_runs=1, steps=30,
                        rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                        out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
                        use_multiprocessing=True):
@@ -636,47 +636,82 @@ def run_parameter_grid(size_values, quality_values, proximity_values, function_v
         df_res = pd.DataFrame(results)
         df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
 
-    # Final aggregation (nachdem results vollständig aufgebaut wurde)
+    # Final aggregation
+    df_runs = pd.DataFrame(raw_results)
+    if df_runs.empty:
+        # No runs completed, return empty DataFrame
+        return pd.DataFrame(results)
+
+    # Save any errors
+    if 'error' in df_runs.columns:
+        err_df = df_runs[df_runs['error'].notnull()]
+        if not err_df.empty:
+            err_df.to_csv(os.path.join(out_dir, "grid_errors.csv"), index=False)
+
+    grouped = df_runs.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
+    for name, group in grouped:
+        size, quality, proximity, park_function = name
+
+        # number of runs and kipp count
+        kipp_count = int(group['kipp'].sum())
+        n_runs_actual = len(group)
+
+        # collect kipp times (only where kipp==True and kipp_time not null)
+        kipp_times = group.loc[(group['kipp'] == True) & (group['kipp_time'].notnull()), 'kipp_time'].astype(
+            float).tolist()
+
+        # p_kipp and median_kipp_time
+        p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
+        median_kipp_time = float(np.median(kipp_times)) if len(kipp_times) > 0 else None
+
+        # rent threshold and rent at kipp (if present)
+        rent_threshold_vals = group['rent_threshold'].dropna().astype(
+            float).tolist() if 'rent_threshold' in group else []
+        rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
+
+        rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
+        rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
+
+        # investment / operational costs (take first non-null if available)
+        invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
+        op_vals = group['annual_operational_cost'].dropna().astype(
+            float).tolist() if 'annual_operational_cost' in group else []
+        invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
+        op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
+
+        # prepare outputs (rounded / nan where appropriate)
+        p_kipp_out = round(p_kipp, 2)
+        median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
+        rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
+        rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
+
+        results.append({
+            'size': size,
+            'quality': quality,
+            'proximity': proximity,
+            'function': park_function,
+            'investment_cost': invest_cost_out,
+            'annual_operational_cost': op_cost_out,
+            'p_kipp': p_kipp_out,
+            'median_kipp_time': median_kipp_time_out,
+            'rent_threshold': rent_threshold_out,
+            'rent_at_kipp': rent_at_kipp_out,
+            'n_runs': n_runs_actual
+        })
+
+    # Save final aggregated results to CSV
     df_final = pd.DataFrame(results)
-    df_final.to_csv(os.path.join(out_dir, "grid_results.csv"), index=False)
+    final_path = os.path.join(out_dir, "grid_results.csv")
+    tmp_final = os.path.join(out_dir, "grid_results.tmp.csv")
+    df_final.to_csv(tmp_final, index=False)
+    os.replace(tmp_final, final_path)
 
-    # Collect median_kipp_time values (one per parameter combination)
-    all_median_kipp_times = [r.get('median_kipp_time') for r in results]
-
-    # Collect p_kipp values (one per parameter combination)
-    all_p_kipp_values = [r.get('p_kipp') for r in results]
-
-    # Ensure output path for run_info and overwrite any previous file
-    info_path = os.path.join(out_dir, "run_info.txt")
-    try:
-        with open(info_path, "w") as fh:
-            fh.write(f"Run info for grid sweep started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-    except Exception as e:
-        print(f"Warning: could not initialize run_info file: {e}")
-
-    # Write both statistics with the unified function
-    try:
-        write_run_statistics(all_median_kipp_times, all_p_kipp_values, output_file=info_path)
-    except Exception as e:
-        print(f"Warning: could not write overall statistics: {e}")
-
-    # Existing elapsed time reporting and basic run_info
-    elapsed = time.perf_counter() - start_time
-    hrs, rem = divmod(elapsed, 3600)
-    mins, secs = divmod(rem, 60)
-    elapsed_str = f"{int(hrs):02d}:{int(mins):02d}:{secs:05.2f}"
-    print(f"Grid sweep finished. Total jobs: {total_jobs}. Elapsed time: {elapsed_str}. Results saved to {out_dir}")
-
-    try:
-        with open(info_path, "a") as fh:
-            fh.write(f"finished_at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            fh.write(f"total_jobs: {total_jobs}\n")
-            fh.write(f"elapsed_seconds: {elapsed:.4f}\n")
-            fh.write(f"elapsed_hms: {elapsed_str}\n")
-    except Exception:
-        pass
+    # Optionally print a short summary
+    print(f"Grid sweep finished: {len(df_runs)} runs aggregated into {len(df_final)} parameter combinations.")
+    print(f"Final aggregated results written to: {final_path}")
 
     return df_final
+
 
 # Visualization helpers
 def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=False, y_log=False, cmap='viridis'):
@@ -722,7 +757,7 @@ def example_run():
     function_values = ["recreation", "sports", "greenway"]
 
     df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=75, steps=50,
+                                 n_runs=1, steps=30,
                                  rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
                                  out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
 
@@ -775,9 +810,44 @@ def example_run():
 
             print(f"[INFO] Kosten-Heatmaps gespeichert: {fname_p}, {fname_m}")
         else:
+            # Fallback: If there are no cost columns, retain the old behavior
+            # plot 2D slices: p_kipp and median_kipp_time over size x quality for each proximity and function
+            for prox in proximity_values:
+                for func in function_values:
+                    df_slice = df_grid[(df_grid['decay_scale'] == prox) & (df_grid['park_function'] == func)]
+                    if df_slice.empty:
+                        continue
+
+                    # gemeinsame Vorverarbeitung
+                    df_slice = df_slice.copy()
+                    # p_kipp sollte numerisch vorliegen; median_kipp_time: None -> NaN
+                    df_slice['median_kipp_time'] = df_slice['median_kipp_time'].apply(
+                        lambda x: np.nan if x is None else x)
+
+                    # 1) Heatmap p_kipp
+                    out_file_p = os.path.join(out_dir, f"heatmap_p_kipp_prox_{prox}_func_{func}.png")
+                    plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality', value_col='p_kipp',
+                                           out_file=out_file_p, x_log=False, y_log=False, cmap='viridis')
+                    print(f"[HEATMAP] p_kipp heatmap saved: {out_file_p}")
+
+                    # 2) Heatmap median_kipp_time
+                    # Prüfen, ob es überhaupt median-Werte gibt
+                    if df_slice['median_kipp_time'].dropna().empty:
+                        print(f"[INFO] Keine median_kipp_time Werte für prox={prox}, func={func}; übersprungen.")
+                        continue
+
+                    # Optional: automatische vmin/vmax anhand Quantile für bessere Kontraste
+                    vmin = float(df_slice['median_kipp_time'].dropna().quantile(0.05))
+                    vmax = float(df_slice['median_kipp_time'].dropna().quantile(0.95))
+
+                    out_file_median = os.path.join(out_dir, f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png")
+                    # plot_heatmap_from_grid akzeptiert derzeit kein vmin/vmax-Argument;
+                    # falls du vmin/vmax nutzen willst, erweitere plot_heatmap_from_grid oder setze sie global.
+                    plot_heatmap_from_grid(df_slice, x_col='park_size', y_col='park_quality',
+                                           value_col='median_kipp_time', out_file=out_file_median,
+                                           x_log=False, y_log=False, cmap='magma')
             print("[WARN] Keine Runs mit investment_cost/annual_operational_cost gefunden; keine Kosten-Heatmaps erstellt.")
     else:
-        # Fallback: If there are no cost columns, retain the old behavior
         print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
 
     # Total runtime for example_run
