@@ -52,7 +52,7 @@ DEFAULTS = {
     "beta_ugs": 0.2,
     # park-cost parameter
     "enable_park_costs": False, # Cost Calculation On/Off
-    "apply_costs_to_rents": False, # whether annual operating costs are passed on to tenants
+    "apply_costs_to_rents": True, # whether annual operating costs are passed on to tenants
     "cost_invest_per_m2": 60.0,
     "cost_operational_per_m2_per_year": 1.8,
     "quality_invest_multiplier": 0.5, # Additional investment factor per quality point (0..1)

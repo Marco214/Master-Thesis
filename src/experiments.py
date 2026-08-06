@@ -1,17 +1,43 @@
 """
 Grid-sweep experiments for tipping-point analysis of the gentrification of urban green spaces
 """
-
+import configparser
 import os
 import time
 import random
 import multiprocessing
+from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import t
 
 from model import GreenGentModel
+
+
+@dataclass
+class ExperimentConfig:
+    """Central configuration for all experiment parameters."""
+    size_values: list
+    quality_values: list
+    proximity_values: list
+    function_values: list
+    n_runs: int = 1
+    steps: int = 30
+    rent_rel_threshold: float = 1.10
+    income_shift_threshold: float = 0.003
+    persist_years: int = 3
+    out_dir: str = "results"
+    #model_kwargs: dict | None = None
+    model_kwargs = {
+        'width': 7,
+        'height': 7,
+        'n_agents': 1000,
+        'enable_park_costs': False
+    }
+    base_seed: int = 42
+    n_workers: int | None = None
+    use_multiprocessing: bool = True
 
 # Helper functions
 def ensure_dir(path):
@@ -26,10 +52,9 @@ def safe_remove_from_list(lst, item):
 
 def detect_tipping_local(model, baseline_rent,
                          park_pos=None,
-                         neighborhood_radius=3,
-                         rent_rel_threshold=1.10,
-                         income_shift_threshold=0.003,
-                         persist_years=3):
+                         rent_rel_threshold=ExperimentConfig.rent_rel_threshold,
+                         income_shift_threshold=ExperimentConfig.income_shift_threshold,
+                         persist_years=ExperimentConfig.persist_years,):
     """
     Tipping-point analysis based on the local proportion of high-income households in a park's neighborhood
     """
@@ -396,11 +421,23 @@ def _worker_task(task):
             'annual_operational_cost': None
         }
 
-def run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                       n_runs=10, steps=50,
-                       rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
-                       out_dir="results", model_base_kwargs=None, base_seed=42, n_workers=None,
-                       use_multiprocessing=True):
+def run_parameter_grid(config: ExperimentConfig):
+    """Run grid sweep using a single ExperimentConfig object."""
+
+    size_values = config.size_values
+    quality_values = config.quality_values
+    proximity_values = config.proximity_values
+    function_values = config.function_values
+    n_runs = config.n_runs
+    steps = config.steps
+    rent_rel_threshold = config.rent_rel_threshold
+    income_shift_threshold = config.income_shift_threshold
+    persist_years = config.persist_years
+    out_dir = config.out_dir
+    model_base_kwargs = config.model_kwargs or {}
+    base_seed = config.base_seed
+    n_workers = config.n_workers
+    use_multiprocessing = config.use_multiprocessing
     """
     Grid sweep orchestrator with multiprocessing
     Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially
@@ -756,10 +793,19 @@ def example_run():
     proximity_values = [0.5, 2.0, 4.0]
     function_values = ["recreation", "sports", "greenway"]
 
-    df_grid = run_parameter_grid(size_values, quality_values, proximity_values, function_values,
-                                 n_runs=10, steps=50,
-                                 rent_rel_threshold=1.10, income_shift_threshold=0.003, persist_years=3,
-                                 out_dir=out_dir, model_base_kwargs={'width':7, 'height':7, 'n_agents':1000, 'enable_park_costs': False}, base_seed=42, n_workers=None)
+    config = ExperimentConfig(
+        size_values=size_values,
+        quality_values=quality_values,
+        proximity_values=proximity_values,
+        function_values=function_values,
+        #n_runs=1,
+        #steps=30,
+        #out_dir=out_dir,
+
+        #base_seed=42
+    )
+
+    df_grid = run_parameter_grid(config)
 
     # If cost scenarios are active: only 2 heatmaps for the 4 cost variants
     if 'investment_cost' in df_grid.columns and 'annual_operational_cost' in df_grid.columns:
@@ -813,28 +859,23 @@ def example_run():
             # Standard heatmaps (when no cost scenarios are available)
             for prox in proximity_values:
                 for func in function_values:
-
                     # use the correct column names
                     df_slice = df_grid[
                         (df_grid["proximity"] == prox) &
                         (df_grid["function"] == func)
                         ].copy()
-
                     if df_slice.empty:
                         print(f"[INFO] No data for proximity={prox}, function={func}.")
                         continue
-
                     # ensure numeric values
                     df_slice["median_kipp_time"] = pd.to_numeric(
                         df_slice["median_kipp_time"],
                         errors="coerce"
                     )
-
                     df_slice["p_kipp"] = pd.to_numeric(
                         df_slice["p_kipp"],
                         errors="coerce"
                     )
-
                     # -------------------------------------------------
                     # p_kipp heatmap
                     # -------------------------------------------------
@@ -843,7 +884,6 @@ def example_run():
                             out_dir,
                             f"heatmap_p_kipp_prox_{prox}_func_{func}.png"
                         )
-
                         plot_heatmap_from_grid(
                             df_slice,
                             x_col="size",
@@ -854,21 +894,17 @@ def example_run():
                             y_log=False,
                             cmap="viridis"
                         )
-
                         print(f"[HEATMAP] Saved: {out_file_p}")
-
                     # -------------------------------------------------
                     # median tipping time heatmap
                     # -------------------------------------------------
                     if df_slice["median_kipp_time"].dropna().empty:
                         print(f"[INFO] No median_kipp_time values for proximity={prox}, function={func}.")
                         continue
-
                     out_file_median = os.path.join(
                         out_dir,
                         f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png"
                     )
-
                     plot_heatmap_from_grid(
                         df_slice,
                         x_col="size",
@@ -879,9 +915,7 @@ def example_run():
                         y_log=False,
                         cmap="magma"
                     )
-
                     print(f"[HEATMAP] Saved: {out_file_median}")
-
             print("[INFO] Standard heatmaps created.")
     else:
         print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
