@@ -23,12 +23,11 @@ class ExperimentConfig:
     proximity_values: list
     function_values: list
     n_runs: int = 1
-    steps: int = 30
+    steps: int = 50
     rent_rel_threshold: float = 1.10
     income_shift_threshold: float = 0.003
     persist_years: int = 3
     out_dir: str = "results"
-    #model_kwargs: dict | None = None
     model_kwargs = {
         'width': 7,
         'height': 7,
@@ -320,7 +319,6 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
         model,
         baseline_rent=baseline_rent,
         park_pos=params.get('park_pos', model.parks[0].pos if model.parks else None),
-        neighborhood_radius=params.get('neighborhood_radius', 3),
         rent_rel_threshold=rent_rel_threshold,
         income_shift_threshold=income_shift_threshold,
         persist_years=persist_years
@@ -751,7 +749,7 @@ def run_parameter_grid(config: ExperimentConfig):
 
 
 # Visualization helpers
-def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=False, y_log=False, cmap='viridis'):
+def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=False, y_log=False, cmap='viridis', title=None):
     """
     df_grid: DataFrame with columns x_col, y_col, value_col
     Produces a pivot heatmap and saves to out_file.
@@ -775,7 +773,7 @@ def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=Fal
     plt.yticks(ticks=np.arange(len(y_vals)), labels=yticklabels)
     plt.xlabel(x_col)
     plt.ylabel(y_col)
-    plt.title(f"{value_col} over {x_col} x {y_col}")
+    plt.title(title if title is not None else value_col)
     plt.tight_layout()
     ensure_dir(os.path.dirname(out_file) or ".")
     plt.savefig(out_file, dpi=150)
@@ -851,10 +849,10 @@ def example_run():
             fname_p = os.path.join(out_dir, "heatmap_p_kipp_costs.png")
             fname_m = os.path.join(out_dir, "heatmap_median_kipp_time_costs.png")
 
-            save_cost_heatmap(pivot_p, "Kipp-Wahrscheinlichkeit über Kostenvarianten", "p_kipp (Wahrscheinlichkeit)", fname_p, cmap='viridis')
-            save_cost_heatmap(pivot_m, "Median Kipp-Zeit über Kostenvarianten", "Median Kipp-Zeit (Jahre)", fname_m, cmap='magma')
+            save_cost_heatmap(pivot_p, "p_kipp across cost scenarios", "p_kipp", fname_p, cmap='viridis')
+            save_cost_heatmap(pivot_m, "median_kipp_time across cost scenarios", "median kipp time (years)", fname_m, cmap='magma')
 
-            print(f"[INFO] Kosten-Heatmaps gespeichert: {fname_p}, {fname_m}")
+            print(f"Cost Heatmaps Saved: {fname_p}, {fname_m}")
         else:
             # Standard heatmaps (when no cost scenarios are available)
             for prox in proximity_values:
@@ -892,7 +890,8 @@ def example_run():
                             out_file=out_file_p,
                             x_log=False,
                             y_log=False,
-                            cmap="viridis"
+                            cmap="viridis",
+                            title=f"Probability of tipping (proximity = {prox}, function = {func})"
                         )
                         print(f"[HEATMAP] Saved: {out_file_p}")
                     # -------------------------------------------------
@@ -913,12 +912,13 @@ def example_run():
                         out_file=out_file_median,
                         x_log=False,
                         y_log=False,
-                        cmap="magma"
+                        cmap="magma",
+                        title=f"Median tipping time (proximity = {prox}, function = {func})"
                     )
                     print(f"[HEATMAP] Saved: {out_file_median}")
-            print("[INFO] Standard heatmaps created.")
+            print("Standard Heatmaps Created.")
     else:
-        print("[INFO] Kostenfelder nicht in Ergebnissen gefunden; Standard-Heatmap-Logik bleibt aktiv.")
+        print("Cost fields not found in results; default heatmap logic remains active.")
 
     # Total runtime for example_run
     run_elapsed = time.perf_counter() - run_start
