@@ -94,27 +94,22 @@ def detect_tipping_local(model, baseline_rent,
 
     return False, None
 
-def write_run_statistics(all_median_kipp_times, all_p_kipp_values=None, output_file="run_info.txt"):
+def write_run_statistics(df_grid, output_file="run_info.txt"):
     """
     Writes overall statistics of the median tipping times and optionally p_kipp
     over all parameter combinations to run_info.txt.
 
     Parameters
     ----------
-    all_median_kipp_times : list[float]
-        One median tipping time for each parameter combination (NaN allowed).
-
-    all_p_kipp_values : list[float] or None
-        One p_kipp value for each parameter combination (NaN allowed). If None,
-        p_kipp statistics are not written.
+    df_grid : Any
 
     output_file : str
         Path to run_info.txt
     """
     # --- median_kipp_time statistics ---
-    values = np.array(all_median_kipp_times, dtype=float)
-    values = values[~np.isnan(values)]
-    n = len(values)
+    median_values = df_grid["median_kipp_time"].to_numpy(dtype=float)
+    median_values = median_values[~np.isnan(median_values)]
+    n = len(median_values)
 
     with open(output_file, "a") as f:
         f.write("\n")
@@ -125,13 +120,13 @@ def write_run_statistics(all_median_kipp_times, all_p_kipp_values=None, output_f
         if n == 0:
             f.write("No valid median_kipp_time values available.\n")
         else:
-            mean = float(np.mean(values))
-            median = float(np.median(values))
-            std = float(np.std(values, ddof=1)) if n > 1 else 0.0
-            minimum = float(np.min(values))
-            maximum = float(np.max(values))
-            q25 = float(np.percentile(values, 25))
-            q75 = float(np.percentile(values, 75))
+            mean = float(np.mean(median_values))
+            median = float(np.median(median_values))
+            std = float(np.std(median_values, ddof=1)) if n > 1 else 0.0
+            minimum = float(np.min(median_values))
+            maximum = float(np.max(median_values))
+            q25 = float(np.percentile(median_values, 25))
+            q75 = float(np.percentile(median_values, 75))
             iqr = q75 - q25
 
             if n > 1 and std > 0.0:
@@ -155,13 +150,10 @@ def write_run_statistics(all_median_kipp_times, all_p_kipp_values=None, output_f
 
     print(f"Median kipp time statistics written to {output_file}")
 
-    # --- p_kipp statistics (optional) ---
-    if all_p_kipp_values is None:
-        return
-
-    p_vals = np.array(all_p_kipp_values, dtype=float)
-    p_vals = p_vals[~np.isnan(p_vals)]
-    n_p = len(p_vals)
+    # --- p_kipp statistics ---
+    p_values = df_grid["p_kipp"].to_numpy(dtype=float)
+    p_values = p_values[~np.isnan(p_values)]
+    n_p = len(p_values)
 
     with open(output_file, "a") as f:
         f.write("\n")
@@ -172,13 +164,13 @@ def write_run_statistics(all_median_kipp_times, all_p_kipp_values=None, output_f
         if n_p == 0:
             f.write("No valid p_kipp values available.\n")
         else:
-            p_mean = float(np.mean(p_vals))
-            p_median = float(np.median(p_vals))
-            p_std = float(np.std(p_vals, ddof=1)) if n_p > 1 else 0.0
-            p_min = float(np.min(p_vals))
-            p_max = float(np.max(p_vals))
-            p_q25 = float(np.percentile(p_vals, 25))
-            p_q75 = float(np.percentile(p_vals, 75))
+            p_mean = float(np.mean(p_values))
+            p_median = float(np.median(p_values))
+            p_std = float(np.std(p_values, ddof=1)) if n_p > 1 else 0.0
+            p_min = float(np.min(p_values))
+            p_max = float(np.max(p_values))
+            p_q25 = float(np.percentile(p_values, 25))
+            p_q75 = float(np.percentile(p_values, 75))
             p_iqr = p_q75 - p_q25
 
             if n_p > 1 and p_std > 0.0:
@@ -796,14 +788,11 @@ def example_run():
         quality_values=quality_values,
         proximity_values=proximity_values,
         function_values=function_values,
-        #n_runs=1,
-        #steps=30,
-        #out_dir=out_dir,
-
-        #base_seed=42
     )
 
     df_grid = run_parameter_grid(config)
+
+    write_run_statistics(df_grid)
 
     # If cost scenarios are active: only 2 heatmaps for the 4 cost variants
     if 'investment_cost' in df_grid.columns and 'annual_operational_cost' in df_grid.columns:
