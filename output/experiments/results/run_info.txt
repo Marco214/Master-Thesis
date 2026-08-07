@@ -1,0 +1,33 @@
+
+============================================================
+OVERALL MEDIAN KIPP TIME STATISTICS
+============================================================
+Number of parameter combinations : 4
+
+Mean                           : 20.250
+Median                         : 20.500
+Standard deviation             : 8.655
+
+Minimum                        : 10.000
+25 % Quantile                  : 15.250
+75 % Quantile                  : 25.500
+Maximum                        : 30.000
+Interquartile Range (IQR)      : 10.250
+
+95 % Confidence Interval       : [6.477, 34.023]
+
+============================================================
+OVERALL P_KIPP STATISTICS
+============================================================
+Mean                           : 0.200
+Median                         : 0.200
+Standard deviation             : 0.115
+
+Minimum                        : 0.100
+25 % Quantile                  : 0.100
+75 % Quantile                  : 0.300
+Maximum                        : 0.300
+Interquartile Range (IQR)      : 0.200
+
+95 % Confidence Interval       : [0.016, 0.384]
+============================================================

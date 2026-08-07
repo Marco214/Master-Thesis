@@ -1,7 +1,6 @@
 """
 Grid-sweep experiments for tipping-point analysis of the gentrification of urban green spaces
 """
-import configparser
 import os
 import time
 import random
@@ -11,9 +10,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import t
+import shutil
 
 from model import GreenGentModel
-
 
 @dataclass
 class ExperimentConfig:
@@ -22,17 +21,17 @@ class ExperimentConfig:
     quality_values: list
     proximity_values: list
     function_values: list
-    n_runs: int = 1
+    n_runs: int = 10
     steps: int = 50
     rent_rel_threshold: float = 1.10
     income_shift_threshold: float = 0.003
     persist_years: int = 3
-    out_dir: str = "results"
+    out_dir: str = "../output/experiments"
     model_kwargs = {
         'width': 7,
         'height': 7,
         'n_agents': 1000,
-        'enable_park_costs': False
+        'enable_park_costs': True
     }
     base_seed: int = 42
     n_workers: int | None = None
@@ -42,6 +41,25 @@ class ExperimentConfig:
 def ensure_dir(path):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
+
+def clear_dir(path):
+    """
+    Entfernt alle Dateien und Unterordner in `path`, lässt aber den Ordner selbst bestehen.
+    Wenn der Ordner nicht existiert, wird er angelegt.
+    """
+    ensure_dir(path)
+    # Entferne alle Inhalte sicher
+    for entry in os.listdir(path):
+        full_path = os.path.join(path, entry)
+        try:
+            if os.path.isfile(full_path) or os.path.islink(full_path):
+                os.remove(full_path)
+            elif os.path.isdir(full_path):
+                shutil.rmtree(full_path)
+        except Exception as e:
+            # Robustheit: Fehler protokollieren, aber nicht abbrechen
+            print(f"Warnung: konnte {full_path} nicht löschen: {e}")
+
 
 def safe_remove_from_list(lst, item):
     try:
@@ -94,7 +112,7 @@ def detect_tipping_local(model, baseline_rent,
 
     return False, None
 
-def write_run_statistics(df_grid, output_file="run_info.txt"):
+def write_run_statistics(df_grid, output_file= f"{ExperimentConfig.out_dir}/results/run_info.txt"):
     """
     Writes overall statistics of the median tipping times and optionally p_kipp
     over all parameter combinations to run_info.txt.
@@ -423,7 +441,7 @@ def run_parameter_grid(config: ExperimentConfig):
     rent_rel_threshold = config.rent_rel_threshold
     income_shift_threshold = config.income_shift_threshold
     persist_years = config.persist_years
-    out_dir = config.out_dir
+    out_dir = f"{config.out_dir}/results"
     model_base_kwargs = config.model_kwargs or {}
     base_seed = config.base_seed
     n_workers = config.n_workers
@@ -432,7 +450,16 @@ def run_parameter_grid(config: ExperimentConfig):
     Grid sweep orchestrator with multiprocessing
     Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially
     """
+
+    # --- Neu: Vor jedem Grid-Sweep die Zielordner leeren ---
+    heatmaps_dir = os.path.join(config.out_dir, "experiment_heatmaps")
+    results_dir = out_dir  # already points to config.out_dir/results
+
+    # Stelle sicher, dass die Ordner existieren und leere sie
+    clear_dir(heatmaps_dir)
+    clear_dir(results_dir)
     ensure_dir(out_dir)
+
     results = []
     start_time = time.perf_counter()
 
@@ -622,49 +649,6 @@ def run_parameter_grid(config: ExperimentConfig):
 
     # Final aggregation
     df_runs = pd.DataFrame(raw_results)
-    if 'error' in df_runs.columns:
-        err_df = df_runs[df_runs['error'].notnull()]
-        if not err_df.empty:
-            err_df.to_csv(os.path.join(out_dir, "grid_errors.csv"), index=False)
-
-    grouped = df_runs.groupby(['park_size', 'park_quality', 'decay_scale', 'park_function'])
-    for name, group in grouped:
-        size, quality, proximity, park_function = name
-        kipp_count = int(group['kipp'].sum())
-        n_runs_actual = len(group)
-        kipp_times = group.loc[group['kipp'] == True, 'kipp_time'].dropna().astype(float).tolist()
-        p_kipp = kipp_count / n_runs_actual if n_runs_actual > 0 else 0.0
-        median_kipp_time = (float(np.median(kipp_times)) if len(kipp_times) > 0 else None)
-        rent_threshold_vals = group['rent_threshold'].dropna().astype(float).tolist() if 'rent_threshold' in group else []
-        rent_threshold = float(rent_threshold_vals[0]) if len(rent_threshold_vals) > 0 else None
-        rent_at_kipp_vals = group['rent_at_kipp'].dropna().astype(float).tolist() if 'rent_at_kipp' in group else []
-        rent_at_kipp = float(np.median(rent_at_kipp_vals)) if len(rent_at_kipp_vals) > 0 else None
-        p_kipp_out = round(p_kipp, 2)
-        median_kipp_time_out = (round(median_kipp_time, 2) if median_kipp_time is not None else np.nan)
-        rent_threshold_out = (round(rent_threshold, 2) if rent_threshold is not None else np.nan)
-        rent_at_kipp_out = (round(rent_at_kipp, 2) if rent_at_kipp is not None else np.nan)
-        invest_vals = group['investment_cost'].dropna().astype(float).tolist() if 'investment_cost' in group else []
-        op_vals = group['annual_operational_cost'].dropna().astype(float).tolist() if 'annual_operational_cost' in group else []
-        invest_cost_out = int(round(invest_vals[0])) if len(invest_vals) > 0 else np.nan
-        op_cost_out = int(round(op_vals[0])) if len(op_vals) > 0 else np.nan
-        results.append({
-                'size': size,
-                'quality': quality,
-                'proximity': proximity,
-                'function': park_function,
-                'investment_cost': invest_cost_out,
-                'annual_operational_cost': op_cost_out,
-                'p_kipp': p_kipp_out,
-                'median_kipp_time': median_kipp_time_out,
-                'rent_threshold': rent_threshold_out,
-                'rent_at_kipp': rent_at_kipp_out,
-                'n_runs': n_runs_actual
-        })
-        df_res = pd.DataFrame(results)
-        df_res.to_csv(os.path.join(out_dir, "grid_results_partial.csv"), index=False)
-
-    # Final aggregation
-    df_runs = pd.DataFrame(raw_results)
     if df_runs.empty:
         # No runs completed, return empty DataFrame
         return pd.DataFrame(results)
@@ -734,7 +718,7 @@ def run_parameter_grid(config: ExperimentConfig):
     os.replace(tmp_final, final_path)
 
     # Optionally print a short summary
-    print(f"Grid sweep finished: {len(df_runs)} runs aggregated into {len(df_final)} parameter combinations.")
+    print(f"Grid sweep finished: {len(df_runs)} runs aggregated into {len(df_final)} parameter combinations. -> {len(pd.DataFrame(raw_results))}")
     print(f"Final aggregated results written to: {final_path}")
 
     return df_final
@@ -773,7 +757,7 @@ def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=Fal
 
 # Example runner
 def example_run():
-    out_dir = "../output/experiments"
+    out_dir =  ExperimentConfig.out_dir
     ensure_dir(out_dir)
 
     run_start = time.perf_counter()
@@ -835,8 +819,8 @@ def example_run():
                 plt.savefig(fname, dpi=150)
                 plt.close()
 
-            fname_p = os.path.join(out_dir, "heatmap_p_kipp_costs.png")
-            fname_m = os.path.join(out_dir, "heatmap_median_kipp_time_costs.png")
+            fname_p = os.path.join(f"{out_dir}/experiment_heatmaps", "heatmap_p_kipp_costs.png")
+            fname_m = os.path.join(f"{out_dir}/experiment_heatmaps", "heatmap_median_kipp_time_costs.png")
 
             save_cost_heatmap(pivot_p, "p_kipp across cost scenarios", "p_kipp", fname_p, cmap='viridis')
             save_cost_heatmap(pivot_m, "median_kipp_time across cost scenarios", "median kipp time (years)", fname_m, cmap='magma')
@@ -868,7 +852,7 @@ def example_run():
                     # -------------------------------------------------
                     if not df_slice["p_kipp"].dropna().empty:
                         out_file_p = os.path.join(
-                            out_dir,
+                            f"{out_dir}/experiment_heatmaps",
                             f"heatmap_p_kipp_prox_{prox}_func_{func}.png"
                         )
                         plot_heatmap_from_grid(
@@ -890,7 +874,7 @@ def example_run():
                         print(f"[INFO] No median_kipp_time values for proximity={prox}, function={func}.")
                         continue
                     out_file_median = os.path.join(
-                        out_dir,
+                        f"{out_dir}/experiment_heatmaps",
                         f"heatmap_median_kipp_time_prox_{prox}_func_{func}.png"
                     )
                     plot_heatmap_from_grid(
