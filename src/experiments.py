@@ -310,6 +310,7 @@ def run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_
             model.cell_map[pos].occupants.append(a)
 
     # run model
+    model.datacollector.collect(model)
     model.run_model(steps)
 
     # collect time series
@@ -722,7 +723,6 @@ def run_parameter_grid(config: ExperimentConfig):
     print(f"Final aggregated results written to: {final_path}")
 
     return df_final
-
 
 # Visualization helpers
 def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=False, y_log=False, cmap='viridis', title=None):

@@ -42,7 +42,7 @@ DEFAULTS = {
     "seed": None,
     # heatmap export params
     "export_every": 10,
-    "out_dir": "../output/heatmaps",
+    "out_dir": "../output/simulation/heatmaps",
     # MCDA weights for UGS attributes (from literature)
     "w_proximity": 0.40,
     "w_size": 0.10,
@@ -581,7 +581,8 @@ class GreenGentModel(Model):
         '''
     # Run with heatmap export
     def run_model(self, steps):
-        for step in range(steps):
+        self.export_heatmaps(0)  # initial state
+        for step in range(1, steps + 1):
             self.step()
-            #if (step % self.export_every) == 0:
-            #    self.export_heatmaps(step)
+            if (step % self.export_every) == 0:
+                    self.export_heatmaps(step)
