@@ -23,11 +23,11 @@ class ExperimentConfig:
     proximity_values: list
     function_values: list
     n_runs: int = 1
-    steps: int = 50
+    steps: int = 30
     rent_rel_threshold: float = 1.10
     income_shift_threshold: float = 0.003
     persist_years: int = 3
-    out_dir: str = "results"
+    out_dir: str = "../output/experiments" #"experiments/results"
     model_kwargs = {
         'width': 7,
         'height': 7,
@@ -773,7 +773,7 @@ def plot_heatmap_from_grid(df_grid, x_col, y_col, value_col, out_file, x_log=Fal
 
 # Example runner
 def example_run():
-    out_dir = "../output/experiments"
+    out_dir = ExperimentConfig.out_dir #"../output/experiments"
     ensure_dir(out_dir)
 
     run_start = time.perf_counter()

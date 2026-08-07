@@ -1,0 +1,2 @@
+park_size,park_quality,decay_scale,park_function,run_idx,seed,kipp,kipp_time,rent_threshold,rent_at_kipp,error
+50000,0.4,2.0,recreation,1,295,False,,,,[Errno 2] No such file or directory: '../output/heatmaps\\rent_year_06.png'
