@@ -2,26 +2,29 @@
 Global Sensitivity Analysis (GSA) for the Green Gentrification Model
 =======================================================================
 
-Analyzes how strongly four park parameters influence the target output
-`median_kipp_time` (median time to reach the gentrification "tipping
-point"):
+Analyzes how strongly four park parameters influence two target outputs
+of the model:
 
     - park_size      : park size in m²             (grid values: 1000/10000/50000/100000)
     - park_quality    : park quality, 0..1           (grid values: 0.2/0.4/0.6/0.8)
     - park_proximity : distance decay ("proximity")  (grid values: 0.5/2.0/4.0)
     - park_function  : park use (categorical)        (recreation/sports/greenway)
 
-Procedure (two stages, as recommended by SALib):
+Note both stages now use the SAME target output, `p_kipp` (the
+probability that a tipping point occurs at all, i.e. the share of
+stochastic replicates that tipped):
 
     1. Morris Screening (Elementary Effects, `SALib.sample/analyze.morris`)
-       over all four parameters -> identifies the most influential
-       parameters based on mu_star (mean absolute elementary effect).
+       over all four parameters, target output `p_kipp` -> identifies
+       the most influential parameters based on mu_star (mean absolute
+       elementary effect).
 
     2. Sobol analysis (Saltelli sampling, `SALib.sample/analyze.sobol`)
-       only for the parameters found most important by Morris (top-K)
-       -> quantifies main effects (S1) and interaction effects (S2, ST).
-       The remaining, screening-unimportant parameters are held at a
-       fixed reference value (drastically reduces the number of required
+       only for the parameters found most important by Morris (top-K),
+       target output `p_kipp` -> quantifies main effects (S1) and
+       interaction effects (S2, ST) on that tipping probability. The
+       remaining, screening-unimportant parameters are held at a fixed
+       reference value (drastically reduces the number of required
        simulations, since Sobol is very expensive: N*(2D+2) resp.
        N*(D+2) runs).
 
@@ -131,8 +134,8 @@ def _evaluate_row(task: Tuple[int, np.ndarray, GSAConfig, int]) -> Dict:
     """
     Runs several stochastic replicates of the model for ONE parameter
     combination (a row of the sample matrix X) and aggregates them into
-    a single target value (median_kipp_time), as SALib expects one
-    model output per sample.
+    a single set of aggregated target values (p_kipp, median_kipp_time) per
+    sample, as SALib expects one model output per sample.
 
     task: (sample_idx, row=[size, quality, proximity, func_code], cfg, seed_offset)
     """
@@ -261,7 +264,10 @@ def run_morris_screening(cfg: GSAConfig, n_trajectories: int, num_levels: int,
     )
 
     df = _run_batch(X, cfg, seed_offset=0, label="Morris")
-    Y = df["median_kipp_time"].to_numpy(dtype=float)
+    # Target output for the Morris screening is the tipping PROBABILITY
+    # (p_kipp = share of stochastic replicates that reached a tipping
+    # point), consistent with the Sobol stage further below.
+    Y = df["p_kipp"].to_numpy(dtype=float)
 
     Si = morris_analyzer.analyze(
         problem, X, Y, num_levels=num_levels, print_to_console=True, seed=seed
@@ -280,7 +286,7 @@ def run_morris_screening(cfg: GSAConfig, n_trajectories: int, num_levels: int,
     }).sort_values("mu_star", ascending=False).reset_index(drop=True)
     df_indices.to_csv(os.path.join(out_dir, "morris_indices.csv"), index=False)
 
-    print("\nRanking by mu_star (influence on median_kipp_time):")
+    print("\nRanking by mu_star (influence on p_kipp, tipping probability):")
     print(df_indices.to_string(index=False))
 
     _plot_morris(df_indices, out_dir)
@@ -293,7 +299,7 @@ def _plot_morris(df_indices: pd.DataFrame, out_dir: str):
     order = df_indices.sort_values("mu_star")
     ax.barh(order["parameter"], order["mu_star"], xerr=order["mu_star_conf"],
             color="seagreen", ecolor="black", capsize=4)
-    ax.set_xlabel(r"$\mu^*$ (mean absolute elementary effect on median_kipp_time)")
+    ax.set_xlabel(r"$\mu^*$ (mean absolute elementary effect on p_kipp)")
     ax.set_title("Morris Screening: Parameter Influence Ranking")
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "morris_screening.png"), dpi=150)
@@ -340,7 +346,10 @@ def run_sobol_analysis(cfg: GSAConfig, active_names: List[str], n_base_samples: 
     X_full = _expand_to_full(active_names, X_active)
 
     df = _run_batch(X_full, cfg, seed_offset=500_000, label="Sobol")
-    Y = df["median_kipp_time"].to_numpy(dtype=float)
+    # Target output for the Sobol stage is the tipping PROBABILITY
+    # (p_kipp = share of stochastic replicates that reached a tipping
+    # point), not the median tipping time used in the Morris stage.
+    Y = df["p_kipp"].to_numpy(dtype=float)
 
     Si = sobol_analyzer.analyze(
         reduced_problem, Y, calc_second_order=calc_second_order,
@@ -359,7 +368,7 @@ def run_sobol_analysis(cfg: GSAConfig, active_names: List[str], n_base_samples: 
     }).sort_values("ST", ascending=False).reset_index(drop=True)
     df_s1_st.to_csv(os.path.join(out_dir, "sobol_S1_ST.csv"), index=False)
 
-    print("\nMain effects (S1) and total effects (ST) on median_kipp_time:")
+    print("\nMain effects (S1) and total effects (ST) on p_kipp (tipping probability):")
     print(df_s1_st.to_string(index=False))
 
     df_s2 = None
@@ -376,7 +385,7 @@ def run_sobol_analysis(cfg: GSAConfig, active_names: List[str], n_base_samples: 
                 })
         df_s2 = pd.DataFrame(rows).sort_values("S2", ascending=False).reset_index(drop=True)
         df_s2.to_csv(os.path.join(out_dir, "sobol_S2_interactions.csv"), index=False)
-        print("\nInteraction effects (S2) between parameter pairs:")
+        print("\nInteraction effects (S2) between parameter pairs (on p_kipp):")
         print(df_s2.to_string(index=False))
 
     _plot_sobol(df_s1_st, df_s2, out_dir)
@@ -395,7 +404,7 @@ def _plot_sobol(df_s1_st: pd.DataFrame, df_s2: Optional[pd.DataFrame], out_dir: 
     ax.set_xticks(x)
     ax.set_xticklabels(df_s1_st["parameter"])
     ax.set_ylabel("Sobol index")
-    ax.set_title("Sobol: Main vs. Total Effects on median_kipp_time")
+    ax.set_title("Sobol: Main vs. Total Effects on p_kipp (Tipping Probability)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "sobol_S1_ST.png"), dpi=150)
@@ -419,7 +428,8 @@ def _plot_sobol(df_s1_st: pd.DataFrame, df_s2: Optional[pd.DataFrame], out_dir: 
 def main():
     parser = argparse.ArgumentParser(
         description="Global Sensitivity Analysis (Morris -> Sobol) for the "
-                     "Green Gentrification Model, target output median_kipp_time."
+                     "Green Gentrification Model. Both stages target "
+                     "p_kipp (tipping probability)."
     )
     parser.add_argument("--morris-n", type=int, default=20,
                          help="Number of Morris trajectories N (model runs: N*(D+1) samples). Default: 20")
