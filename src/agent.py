@@ -75,5 +75,3 @@ class Household(Agent):
                 best_cell.occupants.append(self)
                 self.model.grid.move_agent(self, best_cell.pos)
 
-                #print("Agent", self.unique_id, self.income_group, self.income_value, "moved to ", best_cell.pos)
-

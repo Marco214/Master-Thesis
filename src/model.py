@@ -170,7 +170,6 @@ class GreenGentModel(Model):
         self.cell_map = {}
         for x in range(self.width):
             for y in range(self.height):
-                #base = max(50.0, random.gauss(params["base_rent_mean"], params["base_rent_sd"]))
                 base = np.clip(np.random.lognormal(params["base_rent_mean"], params["base_rent_sigma"]), 750.0, 5000.0)
                 # initial green_score placeholder (will be computed from parks)
                 cell = Cell((x, y), base, green_score=0.0)
@@ -188,7 +187,7 @@ class GreenGentModel(Model):
             function = random.choice(["recreation", "sports", "greenway"])
             park = UGS((px, py), size, quality, function)
 
-            # Kosten berechnen (falls aktiviert)
+            # Calculate costs (if enabled)
             if self.enable_park_costs:
                 park.compute_costs(self.cost_invest_per_m2,
                                    self.cost_operational_per_m2_per_year,
@@ -196,7 +195,7 @@ class GreenGentModel(Model):
                                    self.quality_operational_multiplier)
             self.parks.append(park)
 
-        # Summen initial berechnen
+        # Calculate the initial sums
         self.total_investment = self.compute_total_investment()
         self.total_annual_operational = self.compute_total_annual_operational()
 
@@ -550,35 +549,6 @@ class GreenGentModel(Model):
         # collect data
         self.datacollector.collect(self)
 
-        # debug logging every N steps
-        '''
-        if not hasattr(self, "_step_count"):
-            self._step_count = 0
-        self._step_count += 1
-        if self._step_count % DEFAULTS["export_every"] == 0 or self._step_count == 1:
-            base_rents = [c.base_rent for c in self.cell_map.values()]
-            demand_rents = [
-                c.current_rent(c.occupancy() / max(1, (self.width * self.height) / 100.0),
-                               self.demand_price_elasticity,
-                               self.beta_ugs)
-                for c in self.cell_map.values()
-            ]
-
-            income_grid = self.build_income_grid()  # returns np.array with NaNs for empty cells
-            valid = ~np.isnan(income_grid)
-            if np.any(valid):
-                vals = income_grid[valid]
-                inc_min = float(np.min(vals))
-                inc_max = float(np.max(vals))
-                inc_median = float(np.median(vals))
-                #print(
-                    #f"[CELL INCOME] Step {self._step_count}: min={inc_min:.2f}  median={inc_median:.2f}  max={inc_max:.2f}")
-            #else:
-                #print(f"[CELL INCOME] Step {self._step_count}: no occupied cells")
-
-            #print(f"[CELL RENT] Step {self._step_count}: base_rent min={min(base_rents):.2f} max={max(base_rents):.2f} "
-                  #f"current_rent min={min(demand_rents):.2f} max={max(demand_rents):.2f}")
-        '''
     # Run with heatmap export
     def run_model(self, steps):
         self.export_heatmaps(0)  # initial state

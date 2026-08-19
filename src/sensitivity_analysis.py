@@ -1,6 +1,5 @@
 """
 Global Sensitivity Analysis (GSA) for the Green Gentrification Model
-=======================================================================
 
 Analyzes how strongly four park parameters influence two target outputs
 of the model:
@@ -9,10 +8,6 @@ of the model:
     - park_quality    : park quality, 0..1           (grid values: 0.2/0.4/0.6/0.8)
     - park_proximity : distance decay ("proximity")  (grid values: 0.5/2.0/4.0)
     - park_function  : park use (categorical)        (recreation/sports/greenway)
-
-Note both stages now use the SAME target output, `p_kipp` (the
-probability that a tipping point occurs at all, i.e. the share of
-stochastic replicates that tipped):
 
     1. Morris Screening (Elementary Effects, `SALib.sample/analyze.morris`)
        over all four parameters, target output `p_kipp` -> identifies
@@ -27,35 +22,6 @@ stochastic replicates that tipped):
        reference value (drastically reduces the number of required
        simulations, since Sobol is very expensive: N*(2D+2) resp.
        N*(D+2) runs).
-
-Important methodological notes
---------------------------------
-* SALib only works with continuous factors. `park_function` is
-  categorical (3 levels) and is therefore encoded as a continuous
-  variable on the interval [0, 3) and rounded down with `floor()` to
-  {0,1,2} -> {"recreation","sports","greenway"} for each simulation.
-  This is common practice for categorical factors in Morris/Sobol, but
-  means the sensitivity indices for this factor should be interpreted
-  as an approximation (there is no genuine "distance" between categories).
-* Since the model is stochastic (agent behavior, incomes, starting
-  positions), each drawn parameter combination is simulated
-  `n_replicates` times with different seeds; the model output passed to
-  SALib is the median of the `kipp_time` values across these replicates
-  (analogous to the aggregation in experiments.py).
-* If no tipping point occurs in a replicate, `kipp_time` is undefined
-  (None) by definition. Since SALib cannot handle missing values, such a
-  run is conservatively right-censored at the simulation horizon
-  `steps`, i.e. "no tipping within the observation window" = "it would
-  have tipped at the earliest afterwards". This is a deliberate,
-  clearly documented approximation.
-
-Usage
------
-Place this file in the same folder as model.py / experiments.py / agent.py:
-
-    python sensitivity_analysis_en.py --help
-    python sensitivity_analysis_en.py                     # default run
-    python sensitivity_analysis_en.py --morris-n 20 --sobol-n 128 --top-k 2
 """
 
 import os
@@ -76,9 +42,7 @@ from SALib.analyze import sobol as sobol_analyzer
 
 from experiments import run_single_experiment, ensure_dir, ExperimentConfig
 
-# ---------------------------------------------------------------------
 # Parameter definition
-# ---------------------------------------------------------------------
 PARK_FUNCTIONS = ["recreation", "sports", "greenway"]
 
 # Names and bounds for the full 4-parameter GSA (Morris stage).
@@ -97,7 +61,7 @@ FULL_PROBLEM = {
 # Reference values a parameter is fixed to when it is NOT among the
 # top-K most influential parameters in the Sobol stage.
 FIXED_REFERENCE = {
-    "park_size": 10000.0,     # corresponds to DEFAULTS["park_size_medium"] in model.py
+    "park_size": 10000.0,
     "park_quality": 0.5,
     "park_proximity": 2.0,
     "park_function": 0.0,     # -> "recreation"
@@ -111,9 +75,7 @@ def decode_function(code: float) -> str:
     return PARK_FUNCTIONS[idx]
 
 
-# ---------------------------------------------------------------------
 # GSA configuration
-# ---------------------------------------------------------------------
 @dataclass
 class GSAConfig:
     n_replicates: int = 5                                  # repetitions per parameter sample (to average out stochastic noise)
@@ -247,10 +209,7 @@ def _expand_to_full(active_names: List[str], X_active: np.ndarray) -> np.ndarray
             X_full[:, j] = FIXED_REFERENCE[name]
     return X_full
 
-
-# ---------------------------------------------------------------------
 # Stage 1: Morris Screening
-# ---------------------------------------------------------------------
 def run_morris_screening(cfg: GSAConfig, n_trajectories: int, num_levels: int,
                           seed: int, out_dir: str):
     print("\n" + "=" * 70)
@@ -320,10 +279,7 @@ def _plot_morris(df_indices: pd.DataFrame, out_dir: str):
     fig.savefig(os.path.join(out_dir, "morris_mustar_vs_sigma.png"), dpi=150)
     plt.close(fig)
 
-
-# ---------------------------------------------------------------------
 # Stage 2: Sobol analysis for the most important parameters
-# ---------------------------------------------------------------------
 def run_sobol_analysis(cfg: GSAConfig, active_names: List[str], n_base_samples: int,
                         seed: int, out_dir: str, calc_second_order: bool = True):
     print("\n" + "=" * 70)
@@ -421,10 +377,7 @@ def _plot_sobol(df_s1_st: pd.DataFrame, df_s2: Optional[pd.DataFrame], out_dir: 
         fig.savefig(os.path.join(out_dir, "sobol_S2_interactions.png"), dpi=150)
         plt.close(fig)
 
-
-# ---------------------------------------------------------------------
 # Orchestration
-# ---------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
         description="Global Sensitivity Analysis (Morris -> Sobol) for the "

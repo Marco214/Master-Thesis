@@ -12,6 +12,7 @@ The model explores a well-documented urban phenomenon: the installation or impro
 | `agent.py` | Defines the `Household` agent, its utility function, and its per-step decision of whether/where to move. |
 | `simulation.py` | Example entry point: configures and runs a single simulation for an example city, exports heatmaps over time, and plots aggregate income/rent trends. |
 | `experiments.py` | Batch experiment runner: sweeps park parameters (size, quality, proximity, function, and optionally cost variants) across many simulation runs to detect **gentrification tipping points**, in parallel if desired, and produces aggregated results and heatmaps. |
+| `sensitivity_analysis.py` | Global Sensitivity Analysis (GSA): runs a two-stage Morris → Sobol analysis (via `SALib`) on top of `experiments.py`'s `run_single_experiment` to quantify how strongly park parameters (size, quality, proximity, function) drive the tipping probability `p_kipp`. |
 
 ## Core concepts
 
@@ -96,6 +97,17 @@ python simulation.py
 ```
 By default this runs 50 steps with `seed=122`.
 
+## Running a single controlled experiment (`experiments.py`, `run_single_experiment`)
+
+`run_single_experiment(params, seed, steps, rent_rel_threshold, income_shift_threshold, persist_years, export=False)` is the reusable single-run building block used both by the grid sweep and by the sensitivity analysis:
+1. Instantiates a `GreenGentModel` with a deterministic `seed`.
+2. Overrides the model's randomly generated parks with a single controlled park (`park_size`, `park_quality`, `decay_scale`, `park_function`, position), and reshuffles all households across the grid for a clean, symmetric baseline.
+3. If `model_base_kwargs` enables `enable_park_costs`, computes that park's investment/operational costs consistently with the model's cost parameters.
+4. Runs the model for `steps` years, applies `detect_tipping_local` to determine whether/when a tipping point occurred, and returns the time series plus `kipp`, `kipp_time`, the rent threshold, the rent level at tipping, and total investment/operational costs.
+5. Optionally writes the full time series to CSV (`export=True`).
+
+This function is what both `run_parameter_grid` (below) and `sensitivity_analysis.py` call repeatedly (with different parameter combinations and seeds) to turn many single runs into aggregated statistics.
+
 ## Batch experiments & tipping-point analysis (`experiments.py`)
 
 While `simulation.py` runs a single illustrative city, `experiments.py` is designed for **systematic parameter sweeps** across many independent simulation runs, in order to identify **tipping points**: the conditions under which a park triggers a persistent, self-reinforcing shift toward higher-income occupancy nearby.
@@ -146,6 +158,49 @@ python experiments.py
 
 **Note:** running the full example grid sweep involves many simulation runs (potentially dozens to hundreds, depending on `n_runs` and multiprocessing settings) and can take significantly longer than the single-city example in `simulation.py`.
 
+To run directly (executes `example_run()`, which defines the parameter grid, calls `run_parameter_grid`, writes `run_info.txt` via `write_run_statistics`, and produces the heatmaps):
+```bash
+python experiments.py
+```
+`experiments.py` has no command-line arguments — the swept parameter values, `n_runs`, `steps`, and cost settings are configured directly in `example_run()` / `ExperimentConfig`.
+
+## Global Sensitivity Analysis (`sensitivity_analysis.py`)
+
+While `experiments.py` sweeps a fixed grid of parameter combinations, `sensitivity_analysis.py` asks a complementary question: **which of the four park parameters actually drive the tipping probability, and how much?** It builds on `experiments.py`'s `run_single_experiment` and uses the [`SALib`](https://salib.readthedocs.io/) library in a two-stage design, with both stages targeting the **same output**, `p_kipp` (the tipping probability, i.e. the share of stochastic replicates of a parameter combination that reach a tipping point):
+
+1. **Stage 1 — Morris Screening** (`run_morris_screening`, `SALib.sample/analyze.morris`): an Elementary-Effects screening over all four parameters (`park_size`, `park_quality`, `park_proximity`/decay scale, `park_function`) to rank them by influence (`mu_star`, the mean absolute elementary effect) on `p_kipp`, and to get a first indication of nonlinearity/interactions via `sigma`. Produces `morris_indices.csv`, `morris_raw_results.csv`, and the plots `morris_screening.png` and `morris_mustar_vs_sigma.png`.
+2. **Stage 2 — Sobol Analysis** (`run_sobol_analysis`, `SALib.sample/analyze.sobol`, Saltelli sampling): a variance-based analysis restricted to the **top-K** parameters identified as most influential by Morris (the remaining parameters are held fixed at a reference value from `FIXED_REFERENCE`, since full Sobol over all 4 parameters would require far more runs). Quantifies main effects (`S1`) and total effects (`ST`), plus optional pairwise interaction effects (`S2`), on `p_kipp`. Produces `sobol_raw_results.csv`, `sobol_S1_ST.csv`, optionally `sobol_S2_interactions.csv`, and the plots `sobol_S1_ST.png` and `sobol_S2_interactions.png`.
+
+### Methodological notes
+- `SALib` only handles continuous factors, so the categorical `park_function` (`recreation`/`sports`/`greenway`) is sampled on the continuous interval `[0, 3)` and mapped back to a category via `floor()` (`decode_function`) — the resulting sensitivity indices for this factor are therefore an approximation.
+- Because the model is stochastic, each sampled parameter combination is simulated `n_replicates` times with different seeds; the output SALib sees per sample is `p_kipp` aggregated across those replicates (`_evaluate_row`), analogous to the aggregation logic in `experiments.py`.
+- If a replicate never tips, its `kipp_time` is right-censored at the simulation horizon (`steps`) for the purposes of the (informational) `median_kipp_time` output — a deliberate, documented approximation, since SALib cannot handle missing values.
+- Like the grid sweep, both stages parallelize model runs across CPU cores via `multiprocessing.Pool` (`_run_batch`, `spawn` context, `imap_unordered`), with progress printed as batches complete.
+
+### Running the sensitivity analysis
+```bash
+python sensitivity_analysis.py                              # default run (Morris N=20, Sobol N=512, top-2 parameters)
+python sensitivity_analysis.py --help                        # list all options
+python sensitivity_analysis.py --morris-n 20 --sobol-n 128 --top-k 2
+```
+Key command-line options:
+
+| Option | Effect | Default |
+|---|---|---|
+| `--morris-n` | Number of Morris trajectories (model runs: `N*(D+1)` samples) | 20 |
+| `--morris-levels` | Number of levels in the Morris grid | 4 |
+| `--sobol-n` | Sobol base sample size (model runs: `N*(2D+2)` samples) | 512 |
+| `--top-k` | Number of Morris-ranked parameters carried into the Sobol stage | 2 |
+| `--replicates` | Stochastic repetitions per parameter combination | 5 |
+| `--steps` | Simulation years per run | matches `ExperimentConfig.steps` |
+| `--n-agents` | Number of households in the model | matches `ExperimentConfig.model_kwargs` |
+| `--workers` | Number of parallel worker processes | all CPU cores |
+| `--seed` | Seed for the Morris/Sobol sampling procedures | 42 |
+| `--out-dir` | Output directory for CSVs and plots | `../output/gsa` |
+| `--no-second-order` | Skip Sobol `S2` interaction indices (faster) | off |
+
+**Note:** this analysis requires the `SALib` package in addition to the base requirements, and is computationally expensive — a full run performs `N*(D+1)` Morris evaluations plus `N*(2D+2)` (or `N*(D+2)` without second-order indices) Sobol evaluations, each multiplied by `n_replicates` stochastic model runs.
+
 ## Requirements
 - Python 3
 - [`mesa`](https://pypi.org/project/Mesa/) (Version 2.1.1 note: uses the older `mesa.time.RandomActivation` / `mesa.space.MultiGrid` API)
@@ -153,7 +208,9 @@ python experiments.py
 - `pandas`
 - `networkX`
 - `matplotlib`
-- `multiprocessing` (standard library; used by `experiments.py` for parallel grid sweeps)
+- `scipy` (used by `experiments.py` for confidence-interval statistics in `write_run_statistics`)
+- [`SALib`](https://pypi.org/project/SALib/) (used by `sensitivity_analysis.py` for Morris/Sobol sampling and analysis)
+- `multiprocessing` (standard library; used by `experiments.py` and `sensitivity_analysis.py` for parallel batch runs)
 
 ## Data dependencies
 `model.py` expects an income distribution CSV at `../income/income_clean.csv`, containing (at minimum) columns `percent`, `percent_cumul`, `bound_low`, and `bound_high`, used to probabilistically assign each household's income group and monthly income.
@@ -169,6 +226,7 @@ python experiments.py
 | `park_coverage` | Density of parks across the grid |
 | `enable_park_costs` / `apply_costs_to_rents` | Whether park investment/operating costs feed back into rents |
 | `rent_rel_threshold` / `income_shift_threshold` / `persist_years` (in `experiments.py`) | Thresholds defining what counts as a gentrification "tipping point" |
+| `--morris-n` / `--sobol-n` / `--top-k` / `--replicates` (in `sensitivity_analysis.py`) | Sample sizes, number of screened-in parameters, and stochastic repetitions for the GSA; trade off runtime against precision of the sensitivity indices |
 
 ## Notes / caveats
 - `experiments.py` mutates a model's parks and household placement in-place when overriding park parameters; this is intended for controlled single-park tipping-point experiments and is not equivalent to the fully randomized multi-park setup used in `simulation.py`.

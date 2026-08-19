@@ -44,11 +44,11 @@ def ensure_dir(path):
 
 def clear_dir(path):
     """
-    Entfernt alle Dateien und Unterordner in `path`, lässt aber den Ordner selbst bestehen.
-    Wenn der Ordner nicht existiert, wird er angelegt.
+    Removes all files and subfolders in `path`, but leaves the folder itself intact.
+    If the folder does not exist, it is created.
     """
     ensure_dir(path)
-    # Entferne alle Inhalte sicher
+    # Safely delete all content
     for entry in os.listdir(path):
         full_path = os.path.join(path, entry)
         try:
@@ -57,8 +57,8 @@ def clear_dir(path):
             elif os.path.isdir(full_path):
                 shutil.rmtree(full_path)
         except Exception as e:
-            # Robustheit: Fehler protokollieren, aber nicht abbrechen
-            print(f"Warnung: konnte {full_path} nicht löschen: {e}")
+            # Robustness: Log errors, but do not terminate
+            print(f"Warning: could not delete {full_path}: {e}")
 
 
 def safe_remove_from_list(lst, item):
@@ -447,16 +447,10 @@ def run_parameter_grid(config: ExperimentConfig):
     base_seed = config.base_seed
     n_workers = config.n_workers
     use_multiprocessing = config.use_multiprocessing
-    """
-    Grid sweep orchestrator with multiprocessing
-    Runs a 4D grid sweep. Set use_multiprocessing=False to run sequentially
-    """
 
-    # --- Neu: Vor jedem Grid-Sweep die Zielordner leeren ---
     heatmaps_dir = os.path.join(config.out_dir, "experiment_heatmaps")
     results_dir = out_dir  # already points to config.out_dir/results
 
-    # Stelle sicher, dass die Ordner existieren und leere sie
     clear_dir(heatmaps_dir)
     clear_dir(results_dir)
     ensure_dir(out_dir)
@@ -847,9 +841,7 @@ def example_run():
                         df_slice["p_kipp"],
                         errors="coerce"
                     )
-                    # -------------------------------------------------
                     # p_kipp heatmap
-                    # -------------------------------------------------
                     if not df_slice["p_kipp"].dropna().empty:
                         out_file_p = os.path.join(
                             f"{out_dir}/experiment_heatmaps",
@@ -867,9 +859,7 @@ def example_run():
                             title=f"Probability of tipping (proximity = {prox}, function = {func})"
                         )
                         print(f"[HEATMAP] Saved: {out_file_p}")
-                    # -------------------------------------------------
                     # median tipping time heatmap
-                    # -------------------------------------------------
                     if df_slice["median_kipp_time"].dropna().empty:
                         print(f"[INFO] No median_kipp_time values for proximity={prox}, function={func}.")
                         continue

@@ -67,15 +67,6 @@ def run_example(steps, seed):
         else:
             avg_incomes.append(np.nan)
 
-    """# Plot: Average income over time
-    plt.figure(figsize=(8, 4))
-    plt.plot(avg_incomes, label="avg_income", color="tab:blue")
-    plt.title("Average income over time")
-    plt.xlabel("Years")
-    plt.ylabel("Average income per month")
-    plt.legend()
-    plt.tight_layout()"""
-
     # Plot: Average rent over time
     plt.figure(figsize=(8, 4))
     plt.plot(avg_rents, label="avg_rent", color="tab:orange")
