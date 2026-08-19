@@ -1,0 +1,5 @@
+size,quality,proximity,function,investment_cost,annual_operational_cost,p_kipp,median_kipp_time,rent_threshold,rent_at_kipp,n_runs
+10000,0.4,2.0,recreation,480000,11200,0.15,29.0,4604.19,4901.27,100
+10000,0.8,2.0,recreation,560000,31000,0.18,25.0,4749.0,5035.39,100
+100000,0.4,2.0,recreation,9600000,112000,0.11,18.0,4260.61,5068.12,100
+100000,0.8,2.0,recreation,11200000,310000,0.17,10.0,4894.79,4990.09,100

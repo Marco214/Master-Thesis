@@ -1,0 +1,158 @@
+finished_at: 2026-08-04 09:46:42
+total_jobs: 720
+elapsed_seconds: 749.7476
+elapsed_hms: 00:12:29.75
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations : 1
+
+Mean                           : 33.000
+Median                         : 33.000
+Standard deviation             : 0.000
+
+Minimum                        : 33.000
+25 % Quantile                  : 33.000
+75 % Quantile                  : 33.000
+Maximum                        : 33.000
+Interquartile Range (IQR)      : 0.000
+
+95 % Confidence Interval       : [33.000, 33.000]
+============================================================
+finished_at: 2026-08-04 15:10:09
+total_jobs: 720
+elapsed_seconds: 746.2472
+elapsed_hms: 00:12:26.25
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations : 56
+
+Mean                           : 31.179
+Median                         : 31.000
+Standard deviation             : 4.499
+
+Minimum                        : 22.500
+25 % Quantile                  : 28.000
+75 % Quantile                  : 34.000
+Maximum                        : 44.000
+Interquartile Range (IQR)      : 6.000
+
+95 % Confidence Interval       : [29.974, 32.383]
+============================================================
+finished_at: 2026-08-04 15:28:05
+total_jobs: 432
+elapsed_seconds: 447.7313
+elapsed_hms: 00:07:27.73
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations with tipping points: 80
+
+Mean                           : 31.200
+Median                         : 31.000
+Standard deviation             : 3.811
+
+Minimum                        : 22.000
+25 % Quantile                  : 29.000
+75 % Quantile                  : 34.000
+Maximum                        : 40.000
+Interquartile Range (IQR)      : 5.000
+
+95 % Confidence Interval       : [30.352, 32.048]
+============================================================
+finished_at: 2026-08-04 18:36:52
+total_jobs: 720
+elapsed_seconds: 712.0285
+elapsed_hms: 00:11:52.03
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations with tipping points: 126
+
+Mean                           : 30.889
+Median                         : 30.500
+Standard deviation             : 3.959
+
+Minimum                        : 22.000
+25 % Quantile                  : 28.500
+75 % Quantile                  : 34.000
+Maximum                        : 39.000
+Interquartile Range (IQR)      : 5.500
+
+95 % Confidence Interval       : [30.191, 31.587]
+============================================================
+finished_at: 2026-08-04 19:12:11
+total_jobs: 1440
+elapsed_seconds: 1462.5590
+elapsed_hms: 00:24:22.56
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations with tipping points: 142
+
+Mean                           : 30.694
+Median                         : 30.500
+Standard deviation             : 3.208
+
+Minimum                        : 24.500
+25 % Quantile                  : 28.125
+75 % Quantile                  : 32.500
+Maximum                        : 39.000
+Interquartile Range (IQR)      : 4.375
+
+95 % Confidence Interval       : [30.161, 31.226]
+============================================================
+finished_at: 2026-08-04 20:34:42
+total_jobs: 2880
+elapsed_seconds: 3151.8301
+elapsed_hms: 00:52:31.83
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations with tipping points: 143
+
+Mean                           : 30.787
+Median                         : 30.500
+Standard deviation             : 3.280
+
+Minimum                        : 21.500
+25 % Quantile                  : 29.000
+75 % Quantile                  : 33.000
+Maximum                        : 39.000
+Interquartile Range (IQR)      : 4.000
+
+95 % Confidence Interval       : [30.245, 31.329]
+============================================================
+finished_at: 2026-08-04 21:57:14
+total_jobs: 4320
+elapsed_seconds: 4624.6426
+elapsed_hms: 01:17:04.64
+
+============================================================
+OVERALL TIPPING TIME STATISTICS
+============================================================
+Number of parameter combinations with tipping points: 144
+
+Mean                           : 30.663
+Median                         : 31.000
+Standard deviation             : 2.965
+
+Minimum                        : 24.500
+25 % Quantile                  : 28.500
+75 % Quantile                  : 32.625
+Maximum                        : 38.500
+Interquartile Range (IQR)      : 4.125
+
+95 % Confidence Interval       : [30.175, 31.152]
+============================================================
+finished_at: 2026-08-05 00:16:17
+total_jobs: 7200
+elapsed_seconds: 7870.4798
+elapsed_hms: 02:11:10.48
