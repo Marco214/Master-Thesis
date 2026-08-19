@@ -89,9 +89,7 @@ class GSAConfig:
     out_dir: str = "../output/gsa"
 
 
-# ---------------------------------------------------------------------
-# Simulation worker (top-level, picklable for multiprocessing)
-# ---------------------------------------------------------------------
+# Simulation worker (top-level, pickable for multiprocessing)
 def _evaluate_row(task: Tuple[int, np.ndarray, GSAConfig, int]) -> Dict:
     """
     Runs several stochastic replicates of the model for ONE parameter
